@@ -5,4 +5,5 @@ all_questions
 **/.vscode
 __pycache__/
 *.pyc
-**/my/** */
+# **/my
+# my/
