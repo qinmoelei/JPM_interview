@@ -1,0 +1,8 @@
+all_questions
+*.log
+*.tmp
+.DS_Store
+**/.vscode
+__pycache__/
+*.pyc
+**/my/** */
