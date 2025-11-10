@@ -1,16 +1,21 @@
 from __future__ import annotations
-import argparse, os, numpy as np, pandas as pd
-from typing import Dict
-from src.utils.io import load_config, ensure_dir
+import argparse
+import numpy as np
+from typing import Optional, Sequence
+from src.utils.io import load_config, get_default_config_path
 from src.utils.logging import get_logger
 from src.model.trainer import VPForecaster, training_step
 
 logger = get_logger(__name__)
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--config", required=True)
-    args = ap.parse_args()
+def main(cli_args: Optional[Sequence[str]] = None) -> None:
+    ap = argparse.ArgumentParser(description="Train the VPForecaster model using the configured hyper-parameters.")
+    ap.add_argument(
+        "--config",
+        default=get_default_config_path(),
+        help="Path to the YAML config file. Defaults to %(default)s or $JPM_CONFIG_PATH if set.",
+    )
+    args = ap.parse_args(cli_args)
     cfg = load_config(args.config)
 
     # Placeholder: In a real run, load processed tensors from datahandler steps.

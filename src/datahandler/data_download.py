@@ -1,12 +1,13 @@
 from __future__ import annotations
+import argparse
 import os
 import pandas as pd
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Sequence
 import sys 
 
 sys.path.append('.')
 from src.datahandler.data_sanity_check import standardize_columns
-from src.utils.io import ensure_dir
+from src.utils.io import ensure_dir, load_config, get_default_config_path
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -69,3 +70,25 @@ def download_universe(tickers: List[str], out_dir: str, frequency: str="annual")
         except Exception as e:
             logger.error(f"Failed {tk}: {e}")
 
+def run_download_pipeline(config_path: Optional[str] = None) -> str:
+    """Load config and execute the download stage. Returns the path that was used."""
+    cfg_path = config_path or get_default_config_path()
+    cfg = load_config(cfg_path)
+    raw_dir = cfg.paths["raw_dir"]
+    ensure_dir(raw_dir)
+    download_universe(cfg.tickers, out_dir=raw_dir, frequency=cfg.frequency)
+    logger.info("Download stage finished.")
+    return cfg_path
+
+def main(cli_args: Optional[Sequence[str]] = None) -> None:
+    ap = argparse.ArgumentParser(description="Download raw financial statements for the configured tickers.")
+    ap.add_argument(
+        "--config",
+        default=get_default_config_path(),
+        help="Path to the YAML config file. Defaults to %(default)s or $JPM_CONFIG_PATH if set.",
+    )
+    args = ap.parse_args(cli_args)
+    run_download_pipeline(args.config)
+
+if __name__ == "__main__":
+    main()

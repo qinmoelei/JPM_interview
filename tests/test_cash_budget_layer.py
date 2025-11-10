@@ -1,5 +1,8 @@
 import numpy as np
-import tensorflow as tf
+import pytest
+
+tf = pytest.importorskip("tensorflow", reason="TensorFlow is not installed in the current environment")
+
 from src.model.cash_budget_layer import CashBudgetLayer
 
 def test_identity_holds():
