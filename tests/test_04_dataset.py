@@ -6,7 +6,7 @@ from src.datahandler.dataset import build_sequences
 
 
 def test_build_sequences_returns_expected_shapes():
-    idx = pd.date_range("2020-01-01", periods=7, freq="Y")
+    idx = pd.date_range("2020-01-01", periods=7, freq="YE")
     features = pd.DataFrame({"driver": np.arange(len(idx))}, index=idx)
     targets = pd.DataFrame({"state": np.arange(len(idx)) * 10}, index=idx)
 
@@ -19,7 +19,7 @@ def test_build_sequences_returns_expected_shapes():
 
 
 def test_build_sequences_returns_empty_when_not_enough_history():
-    idx = pd.date_range("2020-01-01", periods=3, freq="Y")
+    idx = pd.date_range("2020-01-01", periods=3, freq="YE")
     features = pd.DataFrame({"driver": [1, 2, 3]}, index=idx)
     targets = pd.DataFrame({"state": [1, 2, 3]}, index=idx)
 

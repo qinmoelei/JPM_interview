@@ -9,16 +9,17 @@ from .metrics import mape, identity_violation
 
 class VPForecaster(tf.keras.Model):
     """Driver nets + deterministic CashBudgetLayer"""
-    def __init__(self, driver_dim: int, state_dim: int = 10, hidden: int = 64):
+
+    def __init__(self, cov_dim: int, driver_dim: int = 16, state_dim: int = 10, hidden: int = 16):
         super().__init__()
-        # Learn drivers from observed covariates (simple MLP; can be replaced by LSTM/Transformer)
+        self.driver_dim = driver_dim
+        # Lightweight sequence model for drivers (LayerNorm + SimpleRNN)
         self.driver_net = tf.keras.Sequential([
-            tf.keras.layers.Input(shape=(None, driver_dim)),  # [B, T, F]
-            tf.keras.layers.Masking(),
-            tf.keras.layers.LSTM(hidden, return_sequences=True),
-            tf.keras.layers.TimeDistributed(tf.keras.layers.Dense(16, activation="relu")),
-            tf.keras.layers.TimeDistributed(tf.keras.layers.Dense(16, activation="relu")),
-            tf.keras.layers.TimeDistributed(tf.keras.layers.Dense(16))
+            tf.keras.layers.Input(shape=(None, cov_dim)),
+            tf.keras.layers.LayerNormalization(),
+            tf.keras.layers.SimpleRNN(hidden, return_sequences=True),
+            tf.keras.layers.TimeDistributed(tf.keras.layers.Dense(hidden, activation="tanh")),
+            tf.keras.layers.TimeDistributed(tf.keras.layers.Dense(driver_dim)),
         ])
         self.cb = CashBudgetLayer()
 
@@ -52,4 +53,12 @@ def training_step(model: VPForecaster,
         loss = loss_fit + loss_id
     grads = tape.gradient(loss, model.trainable_variables)
     optimizer.apply_gradients(zip(grads, model.trainable_variables))
-    return {"loss": float(loss.numpy()), "loss_fit": float(loss_fit.numpy()), "loss_id": float((loss_id).numpy())}
+    mae = tf.reduce_mean(tf.abs(pred_states - target_seq[:, -pred_states.shape[1]:, :]))
+    iden = identity_violation(pred_states)
+    return {
+        "loss": float(loss.numpy()),
+        "loss_fit": float(loss_fit.numpy()),
+        "loss_id": float(loss_id.numpy()),
+        "mae_states": float(mae.numpy()),
+        "identity_violation": float(iden.numpy()),
+    }
