@@ -70,13 +70,14 @@ def download_universe(tickers: List[str], out_dir: str, frequency: str="annual")
         except Exception as e:
             logger.error(f"Failed {tk}: {e}")
 
-def run_download_pipeline(config_path: Optional[str] = None) -> str:
+def run_download_pipeline(config_path: Optional[str] = None, override_frequency: Optional[str] = None) -> str:
     """Load config and execute the download stage. Returns the path that was used."""
     cfg_path = config_path or get_default_config_path()
     cfg = load_config(cfg_path)
     raw_dir = cfg.paths["raw_dir"]
     ensure_dir(raw_dir)
-    download_universe(cfg.tickers, out_dir=raw_dir, frequency=cfg.frequency)
+    frequency = override_frequency or cfg.frequency
+    download_universe(cfg.tickers, out_dir=raw_dir, frequency=frequency)
     logger.info("Download stage finished.")
     return cfg_path
 
@@ -87,8 +88,9 @@ def main(cli_args: Optional[Sequence[str]] = None) -> None:
         default=get_default_config_path(),
         help="Path to the YAML config file. Defaults to %(default)s or $JPM_CONFIG_PATH if set.",
     )
+    ap.add_argument("--frequency", choices=["annual", "quarterly"], default=None, help="Override frequency for download.")
     args = ap.parse_args(cli_args)
-    run_download_pipeline(args.config)
+    run_download_pipeline(args.config, override_frequency=args.frequency)
 
 if __name__ == "__main__":
     main()

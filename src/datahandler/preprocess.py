@@ -99,6 +99,8 @@ class TickerData:
     states: pd.DataFrame
     drivers: pd.DataFrame
     scale: float
+    state_shift: pd.Series
+    state_scale: pd.Series
 
 
 def _read_statement(path: Path) -> pd.DataFrame:
@@ -309,15 +311,37 @@ def _compute_covariates(
     return cov
 
 
-def _normalize(states: pd.DataFrame, drivers: pd.DataFrame, scale: float) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    states_norm = states / scale
-    flow_cols = ["Sales", "COGS", "Opex", "Dep", "Capex", "AmortLT", "Cbar", "EI", "Div"]
-    drivers_norm = drivers.copy()
-    drivers_norm[flow_cols] = drivers_norm[flow_cols] / scale
-    return states_norm, drivers_norm
+def _normalize(states: pd.DataFrame,
+               drivers: pd.DataFrame,
+               method: str,
+               scale: float) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, pd.Series]]:
+    meta: Dict[str, pd.Series] = {}
+    if method == "zscore":
+        states_mean = states.mean()
+        states_std = states.std().replace(0.0, 1.0)
+        meta["state_shift"] = states_mean
+        meta["state_scale"] = states_std
+        states_norm = (states - states_mean) / states_std
+        drivers_mean = drivers.mean()
+        drivers_std = drivers.std().replace(0.0, 1.0)
+        drivers_norm = (drivers - drivers_mean) / drivers_std
+    else:  # scale
+        states_shift = pd.Series(0.0, index=states.columns)
+        states_scale = pd.Series(scale, index=states.columns)
+        meta["state_shift"] = states_shift
+        meta["state_scale"] = states_scale
+        states_norm = states / scale
+        flow_cols = ["Sales", "COGS", "Opex", "Dep", "Capex", "AmortLT", "Cbar", "EI", "Div"]
+        drivers_norm = drivers.copy()
+        drivers_norm[flow_cols] = drivers_norm[flow_cols] / scale
+    return states_norm, drivers_norm, meta
 
 
-def preprocess_ticker(ticker: str, raw_dir: Path, proc_dir: Path, frequency: str) -> Optional[TickerData]:
+def preprocess_ticker(ticker: str,
+                      raw_dir: Path,
+                      proc_dir: Path,
+                      frequency: str,
+                      norm_method: str) -> Optional[TickerData]:
     try:
         is_path = raw_dir / f"{ticker}_IS_{frequency}.csv"
         bs_path = raw_dir / f"{ticker}_BS_{frequency}.csv"
@@ -350,7 +374,7 @@ def preprocess_ticker(ticker: str, raw_dir: Path, proc_dir: Path, frequency: str
     drivers = drivers.loc[common_index]
 
     scale = _determine_scale(is_df, bs_df)
-    states_norm, drivers_norm = _normalize(states, drivers, scale)
+    states_norm, drivers_norm, norm_meta = _normalize(states, drivers, norm_method, scale)
     sales_series = is_df.loc["sales"].reindex(common_index)
     dep_series = _derive_dep(is_df, cf_df).reindex(common_index)
     tax_series = _row_or_default(is_df, "tax", is_df.columns).reindex(common_index).fillna(0.0)
@@ -373,17 +397,36 @@ def preprocess_ticker(ticker: str, raw_dir: Path, proc_dir: Path, frequency: str
     drivers_norm.to_csv(proc_dir / f"{ticker}_drivers_normalized.csv")
     covariates.to_csv(proc_dir / f"{ticker}_covariates.csv")
     meta_path = proc_dir / f"{ticker}_meta.json"
-    meta_path.write_text(json.dumps({"scale": scale, "rows": len(states_norm)}, indent=2))
+    meta_payload = {"scale": scale, "rows": len(states_norm), "norm_method": norm_method}
+    meta_payload.update({k: {col: float(val[col]) for col in val.index} for k, val in norm_meta.items()})
+    meta_path.write_text(json.dumps(meta_payload, indent=2))
 
-    return TickerData(ticker=ticker, states=states_norm, drivers=covariates, scale=scale)
+    return TickerData(
+        ticker=ticker,
+        states=states_norm,
+        drivers=covariates,
+        scale=scale,
+        state_shift=norm_meta["state_shift"],
+        state_scale=norm_meta["state_scale"],
+    )
 
 
 def _assemble_training_dataset(
     ticker_data: List[TickerData], seq_len: int
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[str], List[str]]:
+) -> Tuple[
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    List[str],
+    List[str],
+    np.ndarray,
+    np.ndarray,
+]:
     sequences_states: List[np.ndarray] = []
     sequences_covs: List[np.ndarray] = []
     retained: List[str] = []
+    norm_shifts: List[np.ndarray] = []
+    norm_scales: List[np.ndarray] = []
     if not ticker_data:
         raise RuntimeError("No ticker data provided to assemble the training dataset.")
     min_history = min(len(item.states) for item in ticker_data)
@@ -402,18 +445,26 @@ def _assemble_training_dataset(
         sequences_states.append(states_slice.to_numpy(dtype=np.float32))
         sequences_covs.append(drivers_slice.to_numpy(dtype=np.float32))
         retained.append(item.ticker)
+        norm_shifts.append(item.state_shift.to_numpy(dtype=np.float32))
+        norm_scales.append(item.state_scale.to_numpy(dtype=np.float32))
     if not sequences_states:
         raise RuntimeError("No ticker has enough history to assemble the training dataset.")
     states_arr = np.stack(sequences_states, axis=0)
     covs_arr = np.stack(sequences_covs, axis=0)
     targets_arr = states_arr.copy()
     cov_columns = list(ticker_data[0].drivers.columns)
-    return states_arr, covs_arr, targets_arr, retained, cov_columns
+    state_shift_arr = np.stack(norm_shifts, axis=0)
+    state_scale_arr = np.stack(norm_scales, axis=0)
+    return states_arr, covs_arr, targets_arr, retained, cov_columns, state_shift_arr, state_scale_arr
 
 
-def run_preprocessing_pipeline(config_path: Optional[str] = None, variant: str = "base") -> Path:
+def run_preprocessing_pipeline(config_path: Optional[str] = None,
+                               variant: str = "base",
+                               norm_method: str = "scale",
+                               override_frequency: Optional[str] = None) -> Path:
     cfg_path = config_path or get_default_config_path()
     cfg = load_config(cfg_path)
+    frequency = override_frequency or cfg.frequency
     raw_dir = Path(cfg.paths["raw_dir"])
     proc_root = Path(cfg.paths["proc_dir"])
     proc_dir = proc_root / variant
@@ -421,11 +472,17 @@ def run_preprocessing_pipeline(config_path: Optional[str] = None, variant: str =
     ticker_results: List[TickerData] = []
     for ticker in cfg.tickers:
         logger.info("Preprocessing %s", ticker)
-        td = preprocess_ticker(ticker, raw_dir, proc_dir, cfg.frequency)
+        td = preprocess_ticker(ticker, raw_dir, proc_dir, frequency, norm_method)
         if td:
             ticker_results.append(td)
     seq_len = int(cfg.training.get("window", 6) + cfg.training.get("horizon", 4))
-    states_arr, covs_arr, targets_arr, tickers, cov_columns = _assemble_training_dataset(ticker_results, seq_len)
+    (states_arr,
+     covs_arr,
+     targets_arr,
+     tickers,
+     cov_columns,
+     state_shift_arr,
+     state_scale_arr) = _assemble_training_dataset(ticker_results, seq_len)
     dataset_path = proc_dir / "training_data.npz"
     np.savez(
         dataset_path,
@@ -434,6 +491,8 @@ def run_preprocessing_pipeline(config_path: Optional[str] = None, variant: str =
         target_states=targets_arr,
         tickers=np.array(tickers, dtype="U10"),
         cov_columns=np.array(cov_columns, dtype="U30"),
+        state_shift=state_shift_arr,
+        state_scale=state_scale_arr,
     )
     summary = {
         "tickers": tickers,
@@ -444,6 +503,8 @@ def run_preprocessing_pipeline(config_path: Optional[str] = None, variant: str =
         "covs_shape": covs_arr.shape,
         "covariate_columns": cov_columns,
         "variant": variant,
+        "norm_method": norm_method,
+        "frequency": frequency,
     }
     (proc_dir / "training_summary.json").write_text(json.dumps(summary, indent=2))
     logger.info("Saved normalized dataset to %s", dataset_path)

@@ -43,6 +43,12 @@ def main(cli_args: Optional[Sequence[str]] = None) -> None:
     parser.add_argument("--config", default=get_default_config_path(), help="Path to YAML config file.")
     parser.add_argument("--variant", default="base", help="Name of preprocessing variant under data/processed/.")
     parser.add_argument("--experiment-tag", default=None, help="Optional tag to include in the results folder name.")
+    parser.add_argument(
+        "--target-mode",
+        choices=["residual", "absolute"],
+        default="residual",
+        help="Train on residuals (state_t - state_{t-1}) or absolute states.",
+    )
     args = parser.parse_args(cli_args)
 
     cfg = load_config(args.config)
@@ -55,6 +61,8 @@ def main(cli_args: Optional[Sequence[str]] = None) -> None:
     states = data["states"].astype("float32")
     covs = data["covs"].astype("float32")
     targets = data["target_states"].astype("float32")
+    state_shift = data["state_shift"].astype("float32")
+    state_scale = data["state_scale"].astype("float32")
     if states.ndim != 3:
         raise ValueError("states array must be 3-D [B, T, state_dim]")
 
@@ -93,8 +101,15 @@ def main(cli_args: Optional[Sequence[str]] = None) -> None:
 
     loss_history = []
     batch = {"states": states, "covs": covs, "target_states": targets}
+    use_residual = args.target_mode == "residual"
     for epoch in range(epochs):
-        logs = training_step(model, batch, optimizer, w_identity=weight_identity)
+        logs = training_step(
+            model,
+            batch,
+            optimizer,
+            w_identity=weight_identity,
+            use_residual_target=use_residual,
+        )
         record = {
             "epoch": epoch + 1,
             "losses": {
@@ -140,12 +155,30 @@ def main(cli_args: Optional[Sequence[str]] = None) -> None:
             "epochs": epochs,
             "learning_rate": learning_rate,
             "weight_identity": weight_identity,
+            "target_mode": args.target_mode,
         },
         "device": device_msg,
         "run_dir": str(run_dir),
         "run_name": run_name,
     }
     (run_dir / "learner.json").write_text(json.dumps(learner, indent=2))
+
+    # Evaluate on raw (de-normalized) states for reporting
+    pred_norm, _ = model((states, covs), training=False)
+    pred_norm = pred_norm.numpy()
+    target_norm = states[:, -pred_norm.shape[1]:, :]
+    scale_expanded = state_scale[:, None, :]
+    shift_expanded = state_shift[:, None, :]
+    pred_raw = pred_norm * scale_expanded + shift_expanded
+    target_raw = target_norm * scale_expanded + shift_expanded
+    err = pred_raw - target_raw
+    mae_raw = float(np.mean(np.abs(err)))
+    rmse_raw = float(np.sqrt(np.mean(np.square(err))))
+    eval_metrics = {
+        "mae_raw": mae_raw,
+        "rmse_raw": rmse_raw,
+    }
+    (run_dir / "eval_metrics.json").write_text(json.dumps(eval_metrics, indent=2))
 
     # Classical baselines & plots stored in same run directory
     baseline_summary = run_baselines(
@@ -154,6 +187,7 @@ def main(cli_args: Optional[Sequence[str]] = None) -> None:
         dataset_path=str(dataset_path),
         run_dir=run_dir,
         sample_plot_tickers=summary.get("tickers", [])[:4],
+        hidden_dim=hidden_dim,
     )
     (run_dir / "baseline_metrics.json").write_text(json.dumps(baseline_summary, indent=2))
 

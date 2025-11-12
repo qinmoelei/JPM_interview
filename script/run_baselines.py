@@ -10,7 +10,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-from arch import arch_model
 from statsmodels.tsa.arima.model import ARIMA
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -27,7 +26,7 @@ logger = get_logger(__name__)
 
 
 def _load_states_series(proc_dir: Path, ticker: str) -> pd.DataFrame:
-    path = proc_dir / f"{ticker}_states_normalized.csv"
+    path = proc_dir / f"{ticker}_states_raw.csv"
     if not path.exists():
         raise FileNotFoundError(f"Missing normalized states for {ticker}: {path}")
     df = pd.read_csv(path, index_col=0, parse_dates=True)
@@ -54,27 +53,6 @@ def _rolling_arima(series: pd.Series) -> Tuple[List[float], List[float]]:
     return actual, preds
 
 
-def _rolling_garch(series: pd.Series) -> Tuple[List[float], List[float]]:
-    actual: List[float] = []
-    preds: List[float] = []
-    values = series.astype(float)
-    scale = 1000.0
-    for end in range(10, len(values)):
-        train = values.iloc[:end]
-        target = values.iloc[end]
-        try:
-            am = arch_model(train * scale, mean="AR", lags=1, vol="Garch", p=1, q=1, dist="normal")
-            res = am.fit(disp="off")
-            forecast = res.forecast(horizon=1)
-            pred = forecast.mean.iloc[-1, 0] / scale
-        except Exception as exc:
-            logger.debug("GARCH failed for %s: %s", series.name, exc)
-            continue
-        actual.append(float(target))
-        preds.append(float(pred))
-    return actual, preds
-
-
 def _metrics(actual: List[float], preds: List[float]) -> Dict[str, float]:
     if not actual:
         return {"mae": float("nan"), "rmse": float("nan"), "mape": float("nan"), "count": 0}
@@ -86,24 +64,30 @@ def _metrics(actual: List[float], preds: List[float]) -> Dict[str, float]:
     return {"mae": mae, "rmse": rmse, "mape": mape, "count": len(actual)}
 
 
-def _evaluate_neural(dataset_path: Path, weights_path: Path) -> Dict[str, float]:
+def _evaluate_neural(dataset_path: Path, weights_path: Path, hidden_dim: int = 16) -> Dict[str, float]:
     data = np.load(dataset_path)
     states = data["states"].astype("float32")
     covs = data["covs"].astype("float32")
+    state_shift = data["state_shift"].astype("float32")
+    state_scale = data["state_scale"].astype("float32")
     _, T, state_dim = states.shape
     cov_dim = covs.shape[-1]
     driver_dim = len(DRIVER_COLUMNS)
 
-    model = VPForecaster(cov_dim=cov_dim, driver_dim=driver_dim, state_dim=state_dim)
+    model = VPForecaster(cov_dim=cov_dim, driver_dim=driver_dim, state_dim=state_dim, hidden=hidden_dim)
     _ = model((tf.zeros((1, T, state_dim)), tf.zeros((1, T, cov_dim))))
     model.load_weights(weights_path)
     preds, _ = model((states, covs), training=False)
     preds_np = preds.numpy()
     target = states[:, -preds.shape[1]:, :]
-    err = preds_np - target
+    scale_expanded = state_scale[:, None, :]
+    shift_expanded = state_shift[:, None, :]
+    preds_raw = preds_np * scale_expanded + shift_expanded
+    target_raw = target * scale_expanded + shift_expanded
+    err = preds_raw - target_raw
     mae = float(np.mean(np.abs(err)))
     rmse = float(np.sqrt(np.mean(np.square(err))))
-    mape = float(np.mean(np.abs(err) / (np.abs(target) + 1e-6)))
+    mape = float(np.mean(np.abs(err) / (np.abs(target_raw) + 1e-6)))
     iden = float(identity_violation(tf.convert_to_tensor(preds_np)).numpy())
     return {"mae": mae, "rmse": rmse, "mape": mape, "identity_violation": iden, "count": int(preds_np.size)}
 
@@ -147,6 +131,7 @@ def run_baselines(
     dataset_path: Optional[str] = None,
     run_dir: Optional[Path] = None,
     sample_plot_tickers: Optional[List[str]] = None,
+    hidden_dim: Optional[int] = None,
 ) -> Dict[str, Dict[str, float]]:
     cfg_path = config_path or get_default_config_path()
     cfg = load_config(cfg_path)
@@ -171,8 +156,6 @@ def run_baselines(
 
     arima_actual: List[float] = []
     arima_pred: List[float] = []
-    garch_actual: List[float] = []
-    garch_pred: List[float] = []
     max_tickers = 50  # limit runtime
 
     for ticker in cfg.tickers[:max_tickers]:
@@ -186,21 +169,33 @@ def run_baselines(
         actual, preds = _rolling_arima(states_df[col])
         arima_actual.extend(actual)
         arima_pred.extend(preds)
-        ga, gp = _rolling_garch(states_df[col])
-        garch_actual.extend(ga)
-        garch_pred.extend(gp)
 
     arima_metrics = _metrics(arima_actual, arima_pred)
-    garch_metrics = _metrics(garch_actual, garch_pred)
-    neural_metrics = _evaluate_neural(dataset_path, weights_path)
+    if hidden_dim is None and run_dir:
+        learner_path = Path(run_dir) / "learner.json"
+        if learner_path.exists():
+            try:
+                learner_cfg = json.loads(learner_path.read_text())
+                hidden_dim = int(learner_cfg.get("model", {}).get("hidden_dim", 16))
+            except Exception:
+                hidden_dim = 16
+        else:
+            hidden_dim = 16
+    if hidden_dim is None:
+        hidden_dim = 16
+
+    neural_metrics = _evaluate_neural(dataset_path, weights_path, hidden_dim=hidden_dim)
 
     summary = {
         "config": cfg_path,
         "variant": variant,
         "weights": str(weights_path),
         "arima": arima_metrics,
-        "garch": garch_metrics,
         "neural": neural_metrics,
+        "models": {
+            "arima": {"order": [1, 0, 0], "library": "statsmodels.ARIMA"},
+            "neural": {"driver_dim": len(DRIVER_COLUMNS), "hidden_dim": hidden_dim},
+        },
     }
 
     target_dir = Path(run_dir) if run_dir else Path(cfg.paths.get("results_dir", "results"))
@@ -210,6 +205,15 @@ def run_baselines(
     out_path = target_dir / "baseline_comparison.json"
     out_path.write_text(json.dumps(summary, indent=2))
     logger.info("Saved baseline comparison to %s", out_path)
+
+    if not sample_plot_tickers and run_dir:
+        learner_path = Path(run_dir) / "learner.json"
+        if learner_path.exists():
+            try:
+                learner_cfg = json.loads(learner_path.read_text())
+                sample_plot_tickers = learner_cfg.get("dataset_summary", {}).get("tickers", [])[:4]
+            except Exception:
+                sample_plot_tickers = None
 
     if sample_plot_tickers:
         plot_path = target_dir / "arima_samples.png"
@@ -224,12 +228,14 @@ def main(cli_args: Optional[Sequence[str]] = None) -> None:
     parser.add_argument("--variant", default="base", help="Preprocessing variant under data/processed/.")
     parser.add_argument("--dataset", default=None, help="Optional explicit dataset .npz path.")
     parser.add_argument("--run-dir", default=None, help="Optional run directory containing model weights.")
+    parser.add_argument("--hidden-dim", type=int, default=None, help="Override neural hidden dimension for evaluation.")
     args = parser.parse_args(cli_args)
     summary = run_baselines(
         config_path=args.config,
         variant=args.variant,
         dataset_path=args.dataset,
         run_dir=Path(args.run_dir) if args.run_dir else None,
+        hidden_dim=args.hidden_dim,
     )
     print(json.dumps(summary, indent=2))
 

@@ -11,3 +11,8 @@ def test_balance_identity_pass():
     df = standardize_columns(df, statement="BS")
     ok = check_balance_identity(df)
     assert ok.iloc[0] == True
+
+
+if __name__ == "__main__":
+    import pytest
+    raise SystemExit(pytest.main([__file__]))

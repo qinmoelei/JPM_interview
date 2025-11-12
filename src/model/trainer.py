@@ -13,6 +13,7 @@ class VPForecaster(tf.keras.Model):
     def __init__(self, cov_dim: int, driver_dim: int = 16, state_dim: int = 10, hidden: int = 16):
         super().__init__()
         self.driver_dim = driver_dim
+        hidden = max(1, min(hidden, driver_dim, state_dim, cov_dim))
         # Lightweight sequence model for drivers (LayerNorm + SimpleRNN)
         self.driver_net = tf.keras.Sequential([
             tf.keras.layers.Input(shape=(None, cov_dim)),
@@ -41,14 +42,26 @@ class VPForecaster(tf.keras.Model):
 def training_step(model: VPForecaster,
                   batch: Dict[str, np.ndarray],
                   optimizer: tf.keras.optimizers.Optimizer,
-                  w_identity: float = 1000.0):
+                  w_identity: float = 1000.0,
+                  use_residual_target: bool = True):
     states_seq = tf.convert_to_tensor(batch["states"], dtype=tf.float32)
     covs_seq   = tf.convert_to_tensor(batch["covs"], dtype=tf.float32)
     target_seq = tf.convert_to_tensor(batch["target_states"], dtype=tf.float32)
     with tf.GradientTape() as tape:
         pred_states, _ = model((states_seq, covs_seq), training=True)
-        # Align targets to prediction horizon (T-1)
-        loss_fit = mse_loss(target_seq[:, -pred_states.shape[1]:, :], pred_states)
+        pred_len = pred_states.shape[1]
+        target_slice = target_seq[:, -pred_len:, :]
+        if use_residual_target:
+            if states_seq.shape[1] >= pred_len + 1:
+                prev_states = states_seq[:, -(pred_len + 1):-1, :]
+            else:
+                prev_states = states_seq[:, :pred_len, :]
+            target_used = target_slice - prev_states
+            pred_used = pred_states - prev_states
+        else:
+            target_used = target_slice
+            pred_used = pred_states
+        loss_fit = mse_loss(target_used, pred_used)
         loss_id  = identity_violation(pred_states) * w_identity
         loss = loss_fit + loss_id
     grads = tape.gradient(loss, model.trainable_variables)

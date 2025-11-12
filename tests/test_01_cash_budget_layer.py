@@ -25,3 +25,8 @@ def test_identity_violation_zero_for_balanced_state():
         dtype=tf.float32,
     )
     assert float(identity_violation(balanced).numpy()) == pytest.approx(0.0)
+
+
+if __name__ == "__main__":
+    import pytest
+    raise SystemExit(pytest.main([__file__]))

@@ -27,3 +27,8 @@ def test_build_sequences_returns_empty_when_not_enough_history():
 
     assert X.shape[0] == 0
     assert Y.shape[0] == 0
+
+
+if __name__ == "__main__":
+    import pytest
+    raise SystemExit(pytest.main([__file__]))

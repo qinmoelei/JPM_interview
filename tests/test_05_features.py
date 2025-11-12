@@ -31,3 +31,8 @@ def test_compute_drivers_returns_expected_ratios():
     assert pytest.approx(drivers.loc[period, "DPO"]) == 30.4166666, "DPO should divide AP by COGS"
     assert pytest.approx(drivers.loc[period, "DIO"]) == 48.6666666
     assert pytest.approx(drivers.loc[period, "cash_target_ratio"]) == 0.15
+
+
+if __name__ == "__main__":
+    import pytest
+    raise SystemExit(pytest.main([__file__]))

@@ -52,3 +52,8 @@ def test_run_download_pipeline_uses_default_path(tmp_path: Path) -> None:
     assert used_path == default_path
     assert used_args["config_path"] == default_path
     assert used_args["download"] == (cfg.tickers, cfg.paths["raw_dir"], cfg.frequency)
+
+
+if __name__ == "__main__":
+    import pytest
+    raise SystemExit(pytest.main([__file__]))
