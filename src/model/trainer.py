@@ -1,11 +1,11 @@
 from __future__ import annotations
 import tensorflow as tf
 import numpy as np
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Optional
 
 from .cash_budget_layer import CashBudgetLayer
-from .losses import identity_penalty, mse_loss
-from .metrics import mape, identity_violation
+from .losses import relative_identity_penalty, mse_loss
+from .metrics import identity_violation
 
 class VPForecaster(tf.keras.Model):
     """Driver nets + deterministic CashBudgetLayer"""
@@ -42,36 +42,48 @@ class VPForecaster(tf.keras.Model):
 def training_step(model: VPForecaster,
                   batch: Dict[str, np.ndarray],
                   optimizer: tf.keras.optimizers.Optimizer,
-                  w_identity: float = 1000.0,
-                  use_residual_target: bool = True):
+                  w_identity: float = 5.0,
+                  growth_weight: float = 1.0,
+                  level_weight: float = 0.3,
+                  state_weights: Optional[np.ndarray] = None,
+                  eps: float = 1e-6):
     states_seq = tf.convert_to_tensor(batch["states"], dtype=tf.float32)
     covs_seq   = tf.convert_to_tensor(batch["covs"], dtype=tf.float32)
     target_seq = tf.convert_to_tensor(batch["target_states"], dtype=tf.float32)
+    state_shift = tf.convert_to_tensor(batch["state_shift"], dtype=tf.float32)[:, None, :]
+    state_scale = tf.convert_to_tensor(batch["state_scale"], dtype=tf.float32)[:, None, :]
+    weights_tensor = None
+    if state_weights is not None:
+        weights_tensor = tf.convert_to_tensor(state_weights, dtype=tf.float32)
+        if weights_tensor.ndim == 1:
+            weights_tensor = tf.reshape(weights_tensor, (1, 1, -1))
     with tf.GradientTape() as tape:
         pred_states, _ = model((states_seq, covs_seq), training=True)
         pred_len = pred_states.shape[1]
-        target_slice = target_seq[:, -pred_len:, :]
-        if use_residual_target:
-            if states_seq.shape[1] >= pred_len + 1:
-                prev_states = states_seq[:, -(pred_len + 1):-1, :]
-            else:
-                prev_states = states_seq[:, :pred_len, :]
-            target_used = target_slice - prev_states
-            pred_used = pred_states - prev_states
-        else:
-            target_used = target_slice
-            pred_used = pred_states
-        loss_fit = mse_loss(target_used, pred_used)
-        loss_id  = identity_violation(pred_states) * w_identity
-        loss = loss_fit + loss_id
+        true_curr = target_seq[:, -pred_len:, :]
+        true_prev = target_seq[:, -(pred_len + 1):-1, :]
+        true_curr_raw = true_curr * state_scale + state_shift
+        true_prev_raw = true_prev * state_scale + state_shift
+        pred_raw = pred_states * state_scale + state_shift
+        eps_tensor = tf.constant(eps, dtype=pred_raw.dtype)
+        denom = tf.where(tf.abs(true_prev_raw) < eps_tensor, eps_tensor * tf.ones_like(true_prev_raw), true_prev_raw)
+        g_true = true_curr_raw / denom - 1.0
+        g_pred = pred_raw / denom - 1.0
+        loss_growth = mse_loss(g_true, g_pred, weights=weights_tensor)
+        loss_level = mse_loss(true_curr_raw, pred_raw, weights=weights_tensor)
+        loss_id = relative_identity_penalty(pred_raw) * w_identity
+        loss = growth_weight * loss_growth + level_weight * loss_level + loss_id
     grads = tape.gradient(loss, model.trainable_variables)
     optimizer.apply_gradients(zip(grads, model.trainable_variables))
-    mae = tf.reduce_mean(tf.abs(pred_states - target_seq[:, -pred_states.shape[1]:, :]))
-    iden = identity_violation(pred_states)
+    mae_level = tf.reduce_mean(tf.abs(pred_raw - true_curr_raw))
+    mae_growth = tf.reduce_mean(tf.abs(g_pred - g_true))
+    iden = identity_violation(pred_raw)
     return {
         "loss": float(loss.numpy()),
-        "loss_fit": float(loss_fit.numpy()),
+        "loss_growth": float(loss_growth.numpy()),
+        "loss_level": float(loss_level.numpy()),
         "loss_id": float(loss_id.numpy()),
-        "mae_states": float(mae.numpy()),
+        "mae_states": float(mae_level.numpy()),
+        "mae_growth": float(mae_growth.numpy()),
         "identity_violation": float(iden.numpy()),
     }

@@ -514,12 +514,19 @@ paths:
   proc_dir: data/processed
   results_dir: results
 training:
-  horizon: 4
-  window: 6
+  horizon: 1
+  window: 3
   batch_size: 16
   epochs: 1000
   learning_rate: 1e-3
-  weight_identity: 1000.0
-  weight_nonneg: 10.0
+  weight_identity: 5.0
+  weight_growth: 1.0
+  weight_level: 0.3
+  rolling_mean_window: 4
+  splits:
+    train_end_year: 2015
+    val_end_year: 2019
+    train_frac: 0.6
+    val_frac: 0.2
   val_split: 0.2
   hidden_dim: 8

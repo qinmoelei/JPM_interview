@@ -1,17 +1,31 @@
 from __future__ import annotations
 import tensorflow as tf
 
-def identity_penalty(states_t: tf.Tensor, bs_targets: tf.Tensor, weight: float=1000.0) -> tf.Tensor:
-    """Penalize |Assets - (Liabilities + Equity)| at each time step.
-       If bs_targets includes Total Assets, Total Liab, Total Equity columns, use them;
-       otherwise reconstruct from states_t minimal stack: A=C+INV+K+AR+INVST, L=BST+BLT+AP, E=PIC+RE.
-    """
-    C, INV, K, BST, BLT, RE, PIC, AR, AP, INVST = tf.unstack(states_t, axis=-1)
-    A = C + INV + K + AR + INVST
-    L = BST + BLT + AP
-    E = PIC + RE
-    diff = tf.abs(A - (L + E))
-    return weight * tf.reduce_mean(diff)
+def relative_identity_penalty(states_t: tf.Tensor,
+                              clip_value: float = 0.1,
+                              eps: float = 1e-6) -> tf.Tensor:
+    """Soft penalty on |A - (L+E)| / |A| with clipping to avoid dominance."""
+    (C,
+     INV,
+     K,
+     BST,
+     BLT,
+     RE,
+     PIC,
+     AR,
+     AP,
+     INVST,
+     OTHER_A,
+     OTHER_LE) = tf.unstack(states_t, axis=-1)
+    assets = C + INV + K + AR + INVST + OTHER_A
+    liab_equity = BST + BLT + AP + PIC + RE + OTHER_LE
+    diff = tf.abs(assets - liab_equity)
+    rel = diff / (tf.abs(assets) + eps)
+    rel = tf.clip_by_value(rel, 0.0, clip_value)
+    return tf.reduce_mean(rel)
 
-def mse_loss(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
-    return tf.reduce_mean(tf.square(y_true - y_pred))
+def mse_loss(y_true: tf.Tensor, y_pred: tf.Tensor, weights: tf.Tensor | None = None) -> tf.Tensor:
+    err = tf.square(y_true - y_pred)
+    if weights is not None:
+        err = err * weights
+    return tf.reduce_mean(err)

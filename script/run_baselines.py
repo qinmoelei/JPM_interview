@@ -64,12 +64,21 @@ def _metrics(actual: List[float], preds: List[float]) -> Dict[str, float]:
     return {"mae": mae, "rmse": rmse, "mape": mape, "count": len(actual)}
 
 
-def _evaluate_neural(dataset_path: Path, weights_path: Path, hidden_dim: int = 16) -> Dict[str, float]:
+def _evaluate_neural(dataset_path: Path,
+                     weights_path: Path,
+                     hidden_dim: int = 16,
+                     split: str = "test") -> Dict[str, float]:
     data = np.load(dataset_path)
-    states = data["states"].astype("float32")
-    covs = data["covs"].astype("float32")
-    state_shift = data["state_shift"].astype("float32")
-    state_scale = data["state_scale"].astype("float32")
+    try:
+        states = data[f"states_{split}"].astype("float32")
+        covs = data[f"covs_{split}"].astype("float32")
+        targets = data[f"targets_{split}"].astype("float32")
+        state_shift = data[f"state_shift_{split}"].astype("float32")
+        state_scale = data[f"state_scale_{split}"].astype("float32")
+    except KeyError:
+        raise KeyError(f"Split '{split}' not found in dataset {dataset_path}.")
+    if states.size == 0:
+        return {"mae": float("nan"), "rmse": float("nan"), "mape": float("nan"), "identity_violation": float("nan"), "count": 0}
     _, T, state_dim = states.shape
     cov_dim = covs.shape[-1]
     driver_dim = len(DRIVER_COLUMNS)
@@ -79,7 +88,8 @@ def _evaluate_neural(dataset_path: Path, weights_path: Path, hidden_dim: int = 1
     model.load_weights(weights_path)
     preds, _ = model((states, covs), training=False)
     preds_np = preds.numpy()
-    target = states[:, -preds.shape[1]:, :]
+    pred_len = preds_np.shape[1]
+    target = targets[:, -pred_len:, :]
     scale_expanded = state_scale[:, None, :]
     shift_expanded = state_shift[:, None, :]
     preds_raw = preds_np * scale_expanded + shift_expanded
@@ -88,7 +98,7 @@ def _evaluate_neural(dataset_path: Path, weights_path: Path, hidden_dim: int = 1
     mae = float(np.mean(np.abs(err)))
     rmse = float(np.sqrt(np.mean(np.square(err))))
     mape = float(np.mean(np.abs(err) / (np.abs(target_raw) + 1e-6)))
-    iden = float(identity_violation(tf.convert_to_tensor(preds_np)).numpy())
+    iden = float(identity_violation(tf.convert_to_tensor(preds_raw)).numpy())
     return {"mae": mae, "rmse": rmse, "mape": mape, "identity_violation": iden, "count": int(preds_np.size)}
 
 

@@ -5,7 +5,7 @@ class CashBudgetLayer(tf.keras.layers.Layer):
     """
     Deterministic Vélez–Pareja cash-budget + statements layer.
     Inputs (per time step):
-      states_{t-1}: [C, INV, K, B_ST, B_LT, RE, PIC, AR, AP, INV_STOCK]
+      states_{t-1}: [C, INV, K, B_ST, B_LT, RE, PIC, AR, AP, INV_STOCK, OtherA, OtherLE]
       drivers_t:    [Sales, COGS, Opex, Dep, Capex, r_ST, r_LT, r_INV, Amort_LT, Cbar, EI, Div, tau, DSO, DPO, DIO]
     Outputs:
       states_t, and key IS components.
@@ -14,7 +14,18 @@ class CashBudgetLayer(tf.keras.layers.Layer):
     def call(self, inputs):
         states_prev, drivers = inputs
         # Unpack states
-        C_prev, INV_prev, K_prev, BST_prev, BLT_prev, RE_prev, PIC_prev, AR_prev, AP_prev, INVST_prev = tf.unstack(states_prev, axis=-1)
+        (C_prev,
+         INV_prev,
+         K_prev,
+         BST_prev,
+         BLT_prev,
+         RE_prev,
+         PIC_prev,
+         AR_prev,
+         AP_prev,
+         INVST_prev,
+         OA_prev,
+         OLE_prev) = tf.unstack(states_prev, axis=-1)
         # Unpack drivers
         (Sales, COGS, Opex, Dep, Capex, rST, rLT, rINV, AmortLT, Cbar, EI, Div, tau, DSO, DPO, DIO) = tf.unstack(drivers, axis=-1)
 
@@ -62,6 +73,24 @@ class CashBudgetLayer(tf.keras.layers.Layer):
         RE_t  = RE_prev + NI - Div
 
         # Output packing
-        states_t = tf.stack([C_t, INV_t, K_t, BST_t, BLT_t, RE_t, PIC_t, AR_t, AP_t, INVST_t], axis=-1)
+        eps = tf.constant(1e-6, dtype=states_prev.dtype)
+        assets_core_prev = C_prev + INV_prev + K_prev + AR_prev + INVST_prev
+        assets_core_t = C_t + INV_t + K_t + AR_t + INVST_t
+        ratio = tf.where(
+            tf.abs(assets_core_prev) > eps,
+            OA_prev / (assets_core_prev + tf.sign(assets_core_prev) * eps),
+            tf.zeros_like(OA_prev),
+        )
+        other_assets_t = ratio * assets_core_t
+        assets_total = assets_core_t + other_assets_t
+        liab_core = BST_t + BLT_t + AP_t
+        equity_core = PIC_t + RE_t
+        diff = assets_total - (liab_core + equity_core + OLE_prev)
+        other_lae_t = OLE_prev + diff
+
+        states_t = tf.stack(
+            [C_t, INV_t, K_t, BST_t, BLT_t, RE_t, PIC_t, AR_t, AP_t, INVST_t, other_assets_t, other_lae_t],
+            axis=-1,
+        )
         is_outputs = tf.stack([EBITDA, EBIT, EBT, Tax, NI, iST, iLT, iINV], axis=-1)
         return states_t, is_outputs
