@@ -1,11 +1,14 @@
 from __future__ import annotations
 import tensorflow as tf
 
+
 def mape(y_true: tf.Tensor, y_pred: tf.Tensor, eps: float = 1e-6) -> tf.Tensor:
+    """Mean absolute percentage error (safe when y_true≈0 thanks to eps)."""
     return 100.0 * tf.reduce_mean(tf.abs((y_true - y_pred) / (tf.abs(y_true) + eps)))
 
 
 def identity_violation(states_t: tf.Tensor, eps: float = 1e-6) -> tf.Tensor:
+    """Relative |Assets - (Liab+Equity)| averaged across samples."""
     (C,
      INV,
      K,

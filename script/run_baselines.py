@@ -26,6 +26,7 @@ logger = get_logger(__name__)
 
 
 def _load_states_series(proc_dir: Path, ticker: str) -> pd.DataFrame:
+    """Load normalized state trajectories for plotting/baselines."""
     path = proc_dir / f"{ticker}_states_raw.csv"
     if not path.exists():
         raise FileNotFoundError(f"Missing normalized states for {ticker}: {path}")
@@ -35,6 +36,7 @@ def _load_states_series(proc_dir: Path, ticker: str) -> pd.DataFrame:
 
 
 def _rolling_arima(series: pd.Series) -> Tuple[List[float], List[float]]:
+    """Rolling ARIMA(1,0,0) one-step forecasts -> (actual, prediction) lists."""
     actual: List[float] = []
     preds: List[float] = []
     values = series.astype(float)
@@ -54,6 +56,7 @@ def _rolling_arima(series: pd.Series) -> Tuple[List[float], List[float]]:
 
 
 def _metrics(actual: List[float], preds: List[float]) -> Dict[str, float]:
+    """Helper to compute MAE/RMSE/MAPE for the ARIMA baseline."""
     if not actual:
         return {"mae": float("nan"), "rmse": float("nan"), "mape": float("nan"), "count": 0}
     a = np.array(actual)
@@ -68,6 +71,7 @@ def _evaluate_neural(dataset_path: Path,
                      weights_path: Path,
                      hidden_dim: int = 16,
                      split: str = "test") -> Dict[str, float]:
+    """Load `model.weights.h5`, run inference on one split, and compute masked metrics."""
     data = np.load(dataset_path)
     try:
         states = data[f"states_{split}"].astype("float32")
@@ -75,9 +79,10 @@ def _evaluate_neural(dataset_path: Path,
         targets = data[f"targets_{split}"].astype("float32")
         state_shift = data[f"state_shift_{split}"].astype("float32")
         state_scale = data[f"state_scale_{split}"].astype("float32")
+        mask = data[f"mask_{split}"].astype("float32")
     except KeyError:
         raise KeyError(f"Split '{split}' not found in dataset {dataset_path}.")
-    if states.size == 0:
+    if states.size == 0 or mask.size == 0:
         return {"mae": float("nan"), "rmse": float("nan"), "mape": float("nan"), "identity_violation": float("nan"), "count": 0}
     _, T, state_dim = states.shape
     cov_dim = covs.shape[-1]
@@ -94,15 +99,32 @@ def _evaluate_neural(dataset_path: Path,
     shift_expanded = state_shift[:, None, :]
     preds_raw = preds_np * scale_expanded + shift_expanded
     target_raw = target * scale_expanded + shift_expanded
+    pred_len = preds_np.shape[1]
+    mask_slice = mask[:, -pred_len:]
+    mask_expanded = mask_slice[..., None]
+    denom = float(np.sum(mask_slice) * preds_raw.shape[-1])
+    if denom == 0.0:
+        return {"mae": float("nan"), "rmse": float("nan"), "mape": float("nan"), "identity_violation": float("nan"), "count": 0}
     err = preds_raw - target_raw
-    mae = float(np.mean(np.abs(err)))
-    rmse = float(np.sqrt(np.mean(np.square(err))))
-    mape = float(np.mean(np.abs(err) / (np.abs(target_raw) + 1e-6)))
-    iden = float(identity_violation(tf.convert_to_tensor(preds_raw)).numpy())
-    return {"mae": mae, "rmse": rmse, "mape": mape, "identity_violation": iden, "count": int(preds_np.size)}
+    abs_err = np.abs(err) * mask_expanded
+    sq_err = np.square(err) * mask_expanded
+    mae = float(np.sum(abs_err) / denom)
+    rmse = float(np.sqrt(np.sum(sq_err) / denom))
+    mape = float(np.sum(abs_err / (np.abs(target_raw) + 1e-6)) / denom)
+    mask_bool = mask_slice > 0
+    pred_tensor = tf.convert_to_tensor(preds_raw)
+    if np.any(mask_bool):
+        pred_active = tf.boolean_mask(pred_tensor, mask_bool)
+        iden = float(identity_violation(pred_active).numpy())
+        active = int(np.sum(mask_slice))
+    else:
+        iden = float("nan")
+        active = 0
+    return {"mae": mae, "rmse": rmse, "mape": mape, "identity_violation": iden, "count": active}
 
 
 def _plot_arima_samples(proc_dir: Path, tickers: List[str], out_path: Path) -> None:
+    """Plot ARIMA vs. actual for up to four tickers (saved to PNG)."""
     fig, axes = plt.subplots(2, 2, figsize=(10, 6))
     axes = axes.flatten()
     plotted = 0
@@ -143,6 +165,7 @@ def run_baselines(
     sample_plot_tickers: Optional[List[str]] = None,
     hidden_dim: Optional[int] = None,
 ) -> Dict[str, Dict[str, float]]:
+    """Compare ARIMA vs. neural VPForecaster and optionally save plots."""
     cfg_path = config_path or get_default_config_path()
     cfg = load_config(cfg_path)
     proc_root = Path(cfg.paths.get("proc_dir", "data/processed"))

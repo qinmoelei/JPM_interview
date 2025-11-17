@@ -24,8 +24,14 @@ def relative_identity_penalty(states_t: tf.Tensor,
     rel = tf.clip_by_value(rel, 0.0, clip_value)
     return tf.reduce_mean(rel)
 
-def mse_loss(y_true: tf.Tensor, y_pred: tf.Tensor, weights: tf.Tensor | None = None) -> tf.Tensor:
+def mse_loss(y_true: tf.Tensor,
+             y_pred: tf.Tensor,
+             weights: tf.Tensor | None = None,
+             eps: float = 1e-9) -> tf.Tensor:
+    """Mean-squared error with optional weights (e.g., transition masks * state weights)."""
     err = tf.square(y_true - y_pred)
     if weights is not None:
         err = err * weights
+        denom = tf.reduce_sum(weights)
+        return tf.reduce_sum(err) / tf.maximum(denom, eps)
     return tf.reduce_mean(err)

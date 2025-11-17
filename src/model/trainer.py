@@ -25,19 +25,21 @@ class VPForecaster(tf.keras.Model):
         self.cb = CashBudgetLayer()
 
     def call(self, inputs, training=False):
+        """Forward pass: infer driver adjustments then roll CashBudgetLayer."""
         states_seq, covariates_seq = inputs  # shapes: [B,T,state_dim], [B,T,driver_dim]
         drivers_seq = self.driver_net(covariates_seq, training=training)
         outputs_states = []
         outputs_is = []
-        s_prev = states_seq[:,0,:]  # seed with first observed state
+        s_prev = states_seq[:, 0, :]  # seed with first observed state
         for t in range(1, states_seq.shape[1]):
-            drivers_t = drivers_seq[:,t,:]
+            drivers_t = drivers_seq[:, t, :]
             s_prev, is_out = self.cb((s_prev, drivers_t))
             outputs_states.append(s_prev)
             outputs_is.append(is_out)
         states_pred = tf.stack(outputs_states, axis=1)  # [B, T-1, state_dim]
-        is_pred     = tf.stack(outputs_is, axis=1)      # [B, T-1, 8]
+        is_pred = tf.stack(outputs_is, axis=1)  # [B, T-1, 8]
         return states_pred, is_pred
+
 
 def training_step(model: VPForecaster,
                   batch: Dict[str, np.ndarray],
@@ -47,16 +49,19 @@ def training_step(model: VPForecaster,
                   level_weight: float = 0.3,
                   state_weights: Optional[np.ndarray] = None,
                   eps: float = 1e-6):
+    """One full-batch training step with growth/level/id penalties and masks."""
     states_seq = tf.convert_to_tensor(batch["states"], dtype=tf.float32)
-    covs_seq   = tf.convert_to_tensor(batch["covs"], dtype=tf.float32)
+    covs_seq = tf.convert_to_tensor(batch["covs"], dtype=tf.float32)
     target_seq = tf.convert_to_tensor(batch["target_states"], dtype=tf.float32)
     state_shift = tf.convert_to_tensor(batch["state_shift"], dtype=tf.float32)[:, None, :]
     state_scale = tf.convert_to_tensor(batch["state_scale"], dtype=tf.float32)[:, None, :]
-    weights_tensor = None
+    mask_tensor = tf.convert_to_tensor(batch["transition_mask"], dtype=tf.float32)
+    per_state_weights = None
     if state_weights is not None:
-        weights_tensor = tf.convert_to_tensor(state_weights, dtype=tf.float32)
-        if weights_tensor.ndim == 1:
-            weights_tensor = tf.reshape(weights_tensor, (1, 1, -1))
+        per_state_weights = tf.convert_to_tensor(state_weights, dtype=tf.float32)
+        if per_state_weights.ndim == 1:
+            per_state_weights = tf.reshape(per_state_weights, (1, 1, -1))
+
     with tf.GradientTape() as tape:
         pred_states, _ = model((states_seq, covs_seq), training=True)
         pred_len = pred_states.shape[1]
@@ -65,19 +70,39 @@ def training_step(model: VPForecaster,
         true_curr_raw = true_curr * state_scale + state_shift
         true_prev_raw = true_prev * state_scale + state_shift
         pred_raw = pred_states * state_scale + state_shift
+        mask_slice = mask_tensor[:, -pred_len:]
+        mask_expanded = mask_slice[..., None]
+        if per_state_weights is not None:
+            weights_tensor = mask_expanded * per_state_weights
+        else:
+            weights_tensor = mask_expanded
         eps_tensor = tf.constant(eps, dtype=pred_raw.dtype)
-        denom = tf.where(tf.abs(true_prev_raw) < eps_tensor, eps_tensor * tf.ones_like(true_prev_raw), true_prev_raw)
+        denom = tf.where(tf.abs(true_prev_raw) < eps_tensor, eps_tensor, true_prev_raw)
         g_true = true_curr_raw / denom - 1.0
         g_pred = pred_raw / denom - 1.0
         loss_growth = mse_loss(g_true, g_pred, weights=weights_tensor)
         loss_level = mse_loss(true_curr_raw, pred_raw, weights=weights_tensor)
-        loss_id = relative_identity_penalty(pred_raw) * w_identity
+        mask_bool = mask_slice > 0.0
+        pred_for_identity = tf.boolean_mask(pred_raw, mask_bool)
+        if tf.size(pred_for_identity) > 0:
+            loss_id = relative_identity_penalty(pred_for_identity) * w_identity
+        else:
+            loss_id = tf.constant(0.0, dtype=pred_raw.dtype)
         loss = growth_weight * loss_growth + level_weight * loss_level + loss_id
+
     grads = tape.gradient(loss, model.trainable_variables)
     optimizer.apply_gradients(zip(grads, model.trainable_variables))
-    mae_level = tf.reduce_mean(tf.abs(pred_raw - true_curr_raw))
-    mae_growth = tf.reduce_mean(tf.abs(g_pred - g_true))
-    iden = identity_violation(pred_raw)
+
+    denom_count = tf.maximum(tf.reduce_sum(mask_slice), 1.0) * tf.cast(tf.shape(pred_raw)[-1], pred_raw.dtype)
+    abs_state_err = tf.abs(pred_raw - true_curr_raw)
+    abs_growth_err = tf.abs(g_pred - g_true)
+    mae_level = tf.reduce_sum(abs_state_err * mask_expanded) / denom_count
+    mae_growth = tf.reduce_sum(abs_growth_err * mask_expanded) / denom_count
+    if tf.size(pred_for_identity) > 0:
+        iden = identity_violation(pred_for_identity)
+    else:
+        iden = tf.constant(0.0, dtype=pred_raw.dtype)
+
     return {
         "loss": float(loss.numpy()),
         "loss_growth": float(loss_growth.numpy()),

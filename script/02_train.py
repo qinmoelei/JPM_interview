@@ -26,6 +26,7 @@ SPLIT_NAMES = ("train", "val", "test")
 
 
 def _prepare_paths(cfg, variant: str) -> tuple[Path, Path, Path, Path]:
+    """Resolve processed/data/results folders once so CLI + scripts stay consistent."""
     proc_root = Path(cfg.paths.get("proc_dir", "data/processed"))
     if not proc_root.is_absolute():
         proc_root = PROJECT_ROOT / proc_root
@@ -41,6 +42,7 @@ def _prepare_paths(cfg, variant: str) -> tuple[Path, Path, Path, Path]:
 
 
 def _load_split_batches(np_data: np.lib.npyio.NpzFile) -> Dict[str, Dict[str, np.ndarray]]:
+    """Collect states/covs/targets/meta/masks per split from the cached npz."""
     splits = {}
     for split in SPLIT_NAMES:
         splits[split] = {
@@ -50,11 +52,13 @@ def _load_split_batches(np_data: np.lib.npyio.NpzFile) -> Dict[str, Dict[str, np
             "state_shift": np_data[f"state_shift_{split}"].astype("float32"),
             "state_scale": np_data[f"state_scale_{split}"].astype("float32"),
             "tickers": np_data[f"tickers_{split}"],
+            "mask": np_data[f"mask_{split}"].astype("float32"),
         }
     return splits
 
 
 def _infer_dim(splits: Dict[str, Dict[str, np.ndarray]], key: str) -> int:
+    """Return the trailing dimension for `key` by scanning available splits."""
     for split in SPLIT_NAMES:
         arr = splits[split][key]
         if arr.size > 0:
@@ -64,6 +68,7 @@ def _infer_dim(splits: Dict[str, Dict[str, np.ndarray]], key: str) -> int:
 
 def _evaluate_split(model: VPForecaster,
                     split_batch: Dict[str, np.ndarray]) -> Optional[Dict[str, float]]:
+    """Run inference on one split and compute masked MAE/RMSE/MAPE/identity."""
     states = split_batch["states"]
     if states.size == 0:
         return None
@@ -71,6 +76,9 @@ def _evaluate_split(model: VPForecaster,
     state_shift = split_batch["state_shift"]
     state_scale = split_batch["state_scale"]
     targets = split_batch["targets"]
+    mask = split_batch["mask"]
+    if mask.size == 0:
+        return None
     pred_norm, _ = model((states, covs), training=False)
     pred_norm = pred_norm.numpy()
     pred_len = pred_norm.shape[1]
@@ -79,11 +87,25 @@ def _evaluate_split(model: VPForecaster,
     shift_expanded = state_shift[:, None, :]
     pred_raw = pred_norm * scale_expanded + shift_expanded
     target_raw = target_norm * scale_expanded + shift_expanded
+    mask_slice = mask[:, -pred_len:]
+    mask_expanded = mask_slice[..., None]
+    denom = float(np.sum(mask_slice) * pred_raw.shape[-1])
+    if denom == 0.0:
+        return None
     err = pred_raw - target_raw
-    mae = float(np.mean(np.abs(err)))
-    rmse = float(np.sqrt(np.mean(np.square(err))))
-    mape = float(np.mean(np.abs(err) / (np.abs(target_raw) + 1e-6)))
-    iden = float(identity_violation(tf.convert_to_tensor(pred_raw)).numpy())
+    abs_err = np.abs(err) * mask_expanded
+    sq_err = np.square(err) * mask_expanded
+    mae = float(np.sum(abs_err) / denom)
+    rmse = float(np.sqrt(np.sum(sq_err) / denom))
+    mape = float(
+        np.sum(abs_err / (np.abs(target_raw) + 1e-6)) / denom
+    )
+    mask_bool = mask_slice > 0
+    pred_tensor = tf.convert_to_tensor(pred_raw)
+    if not np.any(mask_bool):
+        return None
+    pred_for_identity = tf.boolean_mask(pred_tensor, mask_bool)
+    iden = float(identity_violation(pred_for_identity).numpy())
     return {
         "mae_raw": mae,
         "rmse_raw": rmse,
@@ -93,6 +115,7 @@ def _evaluate_split(model: VPForecaster,
 
 
 def main(cli_args: Optional[Sequence[str]] = None) -> None:
+    """Train VPForecaster V2 (growth supervision + masks) and log/evaluate the run."""
     parser = argparse.ArgumentParser(description="Train the VPForecaster model with structured logging and baselines.")
     parser.add_argument("--config", default=get_default_config_path(), help="Path to YAML config file.")
     parser.add_argument("--variant", default="base", help="Name of preprocessing variant under data/processed/.")
@@ -171,6 +194,7 @@ def main(cli_args: Optional[Sequence[str]] = None) -> None:
         "target_states": train_data["targets"],
         "state_shift": train_data["state_shift"],
         "state_scale": train_data["state_scale"],
+        "transition_mask": train_data["mask"],
     }
     for epoch in range(epochs):
         logs = training_step(

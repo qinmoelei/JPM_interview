@@ -102,9 +102,18 @@ class TickerData:
     state_shift: pd.Series
     state_scale: pd.Series
     splits: pd.Series
+    transition_splits: pd.Series
 
 
 def _read_statement(path: Path) -> pd.DataFrame:
+    """Load one Yahoo CSV statement.
+
+    Args:
+        path: Location of the CSV exported by `01_download.py`.
+
+    Returns:
+        DataFrame indexed by line-item names with datetime columns.
+    """
     if not path.exists():
         raise FileNotFoundError(f"Missing statement file: {path}")
     df = pd.read_csv(path, index_col=0)
@@ -113,6 +122,15 @@ def _read_statement(path: Path) -> pd.DataFrame:
 
 
 def _apply_fill(df: pd.DataFrame, policies: Dict[str, str]) -> pd.DataFrame:
+    """Impute missing rows/values according to simple deterministic policies.
+
+    Args:
+        df: Statement frame indexed by standardized line-item names.
+        policies: Mapping from row name to fill rule (`zero`, `ffill`, `interp`, `constraint`).
+
+    Returns:
+        DataFrame with all required rows present and NaNs handled.
+    """
     df = df.copy().apply(pd.to_numeric, errors="coerce")
     # make sure required rows exist
     for idx, policy in policies.items():
@@ -136,6 +154,7 @@ def _apply_fill(df: pd.DataFrame, policies: Dict[str, str]) -> pd.DataFrame:
 
 
 def _enforce_bs_constraints(bs_df: pd.DataFrame) -> pd.DataFrame:
+    """Backfill `assets`, `liab_total`, `equity_total` when two of the three are present."""
     bs_df = bs_df.copy()
     assets = bs_df.loc["assets"] if "assets" in bs_df.index else None
     liab = bs_df.loc["liab_total"] if "liab_total" in bs_df.index else None
@@ -150,6 +169,7 @@ def _enforce_bs_constraints(bs_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _derive_dep(is_df: pd.DataFrame, cf_df: pd.DataFrame) -> pd.Series:
+    """Use IS depreciation when available, otherwise CF depreciation proxy."""
     if "dep" in is_df.index:
         series = is_df.loc["dep"]
         if isinstance(series, pd.DataFrame):
@@ -164,6 +184,7 @@ def _derive_dep(is_df: pd.DataFrame, cf_df: pd.DataFrame) -> pd.Series:
 
 
 def _build_states(bs_df: pd.DataFrame) -> pd.DataFrame:
+    """Assemble the core 10+2 balance-sheet state vector for one ticker."""
     data = {}
     for state_name, source in STATE_ORDER:
         if source in bs_df.index:
@@ -183,7 +204,15 @@ def _build_states(bs_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _append_other_accounts(states: pd.DataFrame, bs_df: pd.DataFrame) -> pd.DataFrame:
-    """Construct the residual 'other' assets and liabilities/equity components."""
+    """Construct the residual 'other' assets and liabilities/equity components.
+
+    Args:
+        states: Current core state matrix sorted by period.
+        bs_df: Full balance-sheet table with total assets/liabilities/equity.
+
+    Returns:
+        States augmented with `other_assets` and `other_liab_equity`.
+    """
     states = states.copy()
     def _to_series(df: pd.DataFrame, key: str) -> Optional[pd.Series]:
         if key not in df.index:
@@ -225,6 +254,18 @@ def _assign_splits(index: pd.DatetimeIndex,
                    val_end_year: Optional[int],
                    train_frac: float,
                    val_frac: float) -> pd.Series:
+    """Label each timestamp as train/val/test in chronological order.
+
+    Args:
+        index: Periods for one ticker.
+        train_end_year: Optional calendar cutoff for the training window.
+        val_end_year: Optional calendar cutoff for the validation window.
+        train_frac: Fallback fraction for train share when calendar cutoffs absent.
+        val_frac: Fallback fraction for validation share.
+
+    Returns:
+        Series aligned with `index` containing `train`/`val`/`test`.
+    """
     if len(index) == 0:
         return pd.Series(dtype="object")
     sorted_idx = index.sort_values()
@@ -265,6 +306,7 @@ def _assign_splits(index: pd.DatetimeIndex,
 
 
 def _safe_div(num: pd.Series, denom: pd.Series, default: float) -> pd.Series:
+    """Divide with graceful fallback when denominator hits zero."""
     ratio = num.copy()
     ratio[:] = default
     valid = denom.replace(0.0, np.nan)
@@ -273,6 +315,7 @@ def _safe_div(num: pd.Series, denom: pd.Series, default: float) -> pd.Series:
 
 
 def _row_or_default(df: pd.DataFrame, name: str, index: pd.Index, default: float = 0.0) -> pd.Series:
+    """Return row `name` if it exists, otherwise a constant-valued Series."""
     if name in df.index:
         series = df.loc[name]
         if isinstance(series, pd.DataFrame):
@@ -282,6 +325,7 @@ def _row_or_default(df: pd.DataFrame, name: str, index: pd.Index, default: float
 
 
 def _logit_transform(series: pd.Series, lower: float = 0.0, upper: float = 1.0) -> pd.Series:
+    """Apply a bounded logit so that ratios remain finite."""
     span = upper - lower
     clipped = series.clip(lower + 1e-6, upper - 1e-6)
     normalized = (clipped - lower) / span
@@ -295,6 +339,7 @@ def _build_drivers(
     cf_df: pd.DataFrame,
     states: pd.DataFrame,
 ) -> pd.DataFrame:
+    """Assemble exogenous drivers (flows + policy ratios) for one ticker."""
     is_df = is_df.copy()
     cf_df = cf_df.copy()
     capex = (-_row_or_default(cf_df, "capex", is_df.columns)).clip(lower=0.0)
@@ -357,6 +402,7 @@ def _build_drivers(
 def _determine_scale(is_df: pd.DataFrame,
                      bs_df: pd.DataFrame,
                      train_index: pd.DatetimeIndex) -> float:
+    """Estimate a single scale factor (median sales/assets) using only train periods."""
     if train_index is None or len(train_index) == 0:
         raise ValueError("Training index is required to determine scale without leakage.")
 
@@ -391,6 +437,7 @@ def _compute_covariates(
     dividends: pd.Series,
     taxes: pd.Series,
 ) -> pd.DataFrame:
+    """Generate secondary ratios (growth, capacity, buffer) that are global-normalized."""
     eps = 1e-6
     cov = pd.DataFrame(index=drivers.index)
     capex_abs = capex.abs()
@@ -413,7 +460,16 @@ def _compute_covariates(
 def _augment_with_state_history(states: pd.DataFrame,
                                 covariates: pd.DataFrame,
                                 rolling_window: int = 4) -> pd.DataFrame:
-    """Append lag-1 states and rolling means of past states to the covariates."""
+    """Append lag, rolling mean, and lag/mean ratios (input to the driver MLP).
+
+    Args:
+        states: Cleaned state trajectories.
+        covariates: Driver covariates before augmentation.
+        rolling_window: Number of past periods to average (uses causal rolling mean).
+
+    Returns:
+        Covariate frame with lag/rolling features aligned with `states`.
+    """
     rolling_window = max(1, int(rolling_window))
     lagged = states.shift(1)
     rolling = lagged.rolling(window=rolling_window, min_periods=1).mean()
@@ -437,6 +493,7 @@ def _normalize(states: pd.DataFrame,
                drivers: pd.DataFrame,
                method: str,
                scale: float) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, pd.Series]]:
+    """Normalize states/drivers either via per-ticker scale or z-score (legacy)."""
     meta: Dict[str, pd.Series] = {}
     if method == "zscore":
         states_mean = states.mean()
@@ -469,6 +526,23 @@ def preprocess_ticker(ticker: str,
                       val_end_year: Optional[int],
                       train_frac: float,
                       val_frac: float) -> Optional[TickerData]:
+    """Full per-ticker preprocessing pipeline used by CLI scripts.
+
+    Args:
+        ticker: Equity ticker symbol.
+        raw_dir: Folder containing downloaded Yahoo statements.
+        proc_dir: Where normalized assets/meta should be persisted.
+        frequency: `annual` or `quarterly`.
+        norm_method: Currently `scale` (default) or `zscore` for legacy runs.
+        state_history_window: Rolling window size for lag/rolling features.
+        train_end_year: Optional explicit cutoff for the training portion.
+        val_end_year: Optional explicit cutoff for validation portion.
+        train_frac: Fallback training share when cutoffs absent.
+        val_frac: Fallback validation share when cutoffs absent.
+
+    Returns:
+        TickerData bundle with normalized states, covariates, and masks; `None` on failure.
+    """
     try:
         is_path = raw_dir / f"{ticker}_IS_{frequency}.csv"
         bs_path = raw_dir / f"{ticker}_BS_{frequency}.csv"
@@ -501,6 +575,7 @@ def preprocess_ticker(ticker: str,
     states = states.loc[common_index]
     drivers = drivers.loc[common_index]
     split_labels = split_labels.loc[common_index]
+    transition_labels = split_labels.iloc[1:].copy()
     train_index = split_labels[split_labels == "train"].index
     if len(train_index) == 0:
         logger.warning("No training samples for %s before %s; skipping ticker.", ticker, train_end_year)
@@ -544,33 +619,56 @@ def preprocess_ticker(ticker: str,
         state_shift=norm_meta["state_shift"],
         state_scale=norm_meta["state_scale"],
         splits=split_labels,
+        transition_splits=transition_labels,
     )
 
 
-def _sliding_windows_by_split(states: pd.DataFrame,
+def _windows_with_split_masks(states: pd.DataFrame,
                               covariates: pd.DataFrame,
-                              splits: pd.Series,
-                              seq_len: int) -> Dict[str, Tuple[List[np.ndarray], List[np.ndarray]]]:
-    result = {split: ([], []) for split in ("train", "val", "test")}
-    if len(states) < seq_len:
+                              transition_splits: pd.Series,
+                              seq_len: int) -> Dict[str, Dict[str, List[np.ndarray]]]:
+    """Create sliding windows plus per-split transition masks to avoid leakage.
+
+    Args:
+        states: Normalized state trajectories sorted in time.
+        covariates: Driver features aligned with `states`.
+        transition_splits: Series with length `len(states) - 1`, label of each transition.
+        seq_len: Total steps per window (history + horizon).
+
+    Returns:
+        Dict per split with lists for `states`, `covs`, `targets`, and `mask`.
+    """
+    splits = ("train", "val", "test")
+    result = {split: {"states": [], "covs": [], "targets": [], "mask": []} for split in splits}
+    if len(states) < seq_len or len(transition_splits) == 0:
         return result
-    max_start = len(states) - seq_len + 1
     states_np = states.to_numpy(dtype=np.float32)
     covs_np = covariates.to_numpy(dtype=np.float32)
-    split_values = splits.to_numpy()
+    transition_values = transition_splits.to_numpy(dtype=object)
+    max_start = len(states) - seq_len + 1
+    transitions_per_window = seq_len - 1
     for start in range(max_start):
         end = start + seq_len
-        split_name = split_values[end - 1]
-        if split_name not in result:
+        trans_slice = transition_values[start:start + transitions_per_window]
+        if len(trans_slice) != transitions_per_window:
             continue
-        result[split_name][0].append(states_np[start:end])
-        result[split_name][1].append(covs_np[start:end])
+        state_window = states_np[start:end]
+        cov_window = covs_np[start:end]
+        for split in splits:
+            mask = (trans_slice == split).astype(np.float32)
+            if mask.sum() <= 0:
+                continue
+            result[split]["states"].append(state_window)
+            result[split]["covs"].append(cov_window)
+            result[split]["targets"].append(state_window.copy())
+            result[split]["mask"].append(mask)
     return result
 
 
 def _assemble_training_dataset(
     ticker_data: List[TickerData], seq_len: int
 ) -> Dict[str, Dict[str, np.ndarray]]:
+    """Stack ticker-level sliding windows plus masks into numpy arrays."""
     if not ticker_data:
         raise RuntimeError("No ticker data provided to assemble the training dataset.")
 
@@ -578,33 +676,39 @@ def _assemble_training_dataset(
     split_states = {split: [] for split in splits}
     split_covs = {split: [] for split in splits}
     split_targets = {split: [] for split in splits}
+    split_masks = {split: [] for split in splits}
     split_tickers = {split: [] for split in splits}
     split_shifts = {split: [] for split in splits}
     split_scales = {split: [] for split in splits}
-    window_counts: Dict[str, Dict[str, int]] = {}
+    transition_counts: Dict[str, Dict[str, int]] = {}
 
     for item in ticker_data:
         states_df = item.states.sort_index()
         covs_df = item.drivers.sort_index().reindex(states_df.index)
         covs_df.fillna(0.0, inplace=True)
-        splits_series = item.splits.sort_index().reindex(states_df.index)
-        windows_by_split = _sliding_windows_by_split(states_df, covs_df, splits_series, seq_len)
+        transitions_series = item.transition_splits.reindex(states_df.index[1:])
+        windows_by_split = _windows_with_split_masks(states_df, covs_df, transitions_series, seq_len)
         shift_arr = item.state_shift.to_numpy(dtype=np.float32)
         scale_arr = item.state_scale.to_numpy(dtype=np.float32)
         ticker_counts = {split: 0 for split in splits}
         for split in splits:
-            states_windows, covs_windows = windows_by_split.get(split, ([], []))
+            payload = windows_by_split.get(split, {})
+            states_windows = payload.get("states", [])
             if not states_windows:
                 continue
+            covs_windows = payload["covs"]
+            targets_windows = payload["targets"]
+            masks_windows = payload["mask"]
             split_states[split].extend(states_windows)
             split_covs[split].extend(covs_windows)
-            split_targets[split].extend([window.copy() for window in states_windows])
+            split_targets[split].extend(targets_windows)
+            split_masks[split].extend(masks_windows)
             split_tickers[split].extend([item.ticker] * len(states_windows))
             split_shifts[split].extend([shift_arr.copy() for _ in range(len(states_windows))])
             split_scales[split].extend([scale_arr.copy() for _ in range(len(states_windows))])
-            ticker_counts[split] += len(states_windows)
+            ticker_counts[split] += int(sum(float(np.sum(mask)) for mask in masks_windows))
         if any(ticker_counts.values()):
-            window_counts[item.ticker] = ticker_counts
+            transition_counts[item.ticker] = ticker_counts
 
     if not any(split_states[split] for split in splits):
         raise RuntimeError("No ticker has enough history to assemble the training dataset.")
@@ -622,10 +726,12 @@ def _assemble_training_dataset(
             return np.stack(meta, axis=0).astype(np.float32)
         return np.empty((0, state_dim), dtype=np.float32)
 
+    mask_len = seq_len - 1
     assembled = {
         "state_columns": state_columns,
         "cov_columns": cov_columns,
-        "window_counts": window_counts,
+        "transition_counts": transition_counts,
+        "mask_len": mask_len,
     }
     for split in splits:
         states_list = split_states[split]
@@ -640,6 +746,11 @@ def _assemble_training_dataset(
         assembled[f"tickers_{split}"] = np.array(tickers, dtype="U12") if tickers else np.empty((0,), dtype="U12")
         assembled[f"state_shift_{split}"] = _stack_meta(split_shifts[split], len(state_columns))
         assembled[f"state_scale_{split}"] = _stack_meta(split_scales[split], len(state_columns))
+        masks = split_masks[split]
+        if masks:
+            assembled[f"mask_{split}"] = np.stack(masks, axis=0).astype(np.float32)
+        else:
+            assembled[f"mask_{split}"] = np.empty((0, mask_len), dtype=np.float32)
 
     return assembled
 
@@ -648,6 +759,7 @@ def run_preprocessing_pipeline(config_path: Optional[str] = None,
                                variant: str = "base",
                                norm_method: str = "scale",
                                override_frequency: Optional[str] = None) -> Path:
+    """CLI-friendly preprocessing entry point. Returns the npz path for downstream training."""
     cfg_path = config_path or get_default_config_path()
     cfg = load_config(cfg_path)
     frequency = override_frequency or cfg.frequency
@@ -692,6 +804,7 @@ def run_preprocessing_pipeline(config_path: Optional[str] = None,
     payload = {
         "state_columns": np.array(assembled["state_columns"], dtype="U24"),
         "cov_columns": np.array(assembled["cov_columns"], dtype="U60"),
+        "mask_len": np.int32(assembled["mask_len"]),
     }
     for split in splits:
         payload[f"states_{split}"] = assembled[f"states_{split}"]
@@ -700,6 +813,7 @@ def run_preprocessing_pipeline(config_path: Optional[str] = None,
         payload[f"tickers_{split}"] = assembled[f"tickers_{split}"]
         payload[f"state_shift_{split}"] = assembled[f"state_shift_{split}"]
         payload[f"state_scale_{split}"] = assembled[f"state_scale_{split}"]
+        payload[f"mask_{split}"] = assembled[f"mask_{split}"]
     np.savez(dataset_path, **payload)
     split_counts = {split: int(payload[f"states_{split}"].shape[0]) for split in splits}
     num_sequences = int(sum(split_counts.values()))
@@ -712,11 +826,12 @@ def run_preprocessing_pipeline(config_path: Optional[str] = None,
     )
     summary = {
         "tickers": all_tickers,
-        "samples_per_ticker": assembled["window_counts"],
+        "transitions_per_ticker": assembled["transition_counts"],
         "seq_len_requested": seq_len,
         "seq_len_effective": seq_len,
         "num_samples": num_sequences,
         "split_counts": split_counts,
+        "mask_len": assembled["mask_len"],
         "covariate_columns": assembled["cov_columns"],
         "state_columns": assembled["state_columns"],
         "variant": variant,
