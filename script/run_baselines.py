@@ -175,7 +175,7 @@ def run_baselines(
 
     dataset_path = Path(dataset_path) if dataset_path else proc_dir / "training_data.npz"
     if not dataset_path.exists():
-        raise FileNotFoundError("Run script/00_preprocess.py for the requested variant before evaluating baselines.")
+        raise FileNotFoundError("Run script/01_preprocess.py for the requested variant before evaluating baselines.")
 
     if run_dir:
         weights_path = Path(run_dir) / "model.weights.h5"

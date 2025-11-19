@@ -126,7 +126,7 @@ def main(cli_args: Optional[Sequence[str]] = None) -> None:
     proc_dir, dataset_path, summary_path, results_root = _prepare_paths(cfg, args.variant)
 
     if not dataset_path.exists():
-        raise FileNotFoundError(f"{dataset_path} not found. Run script/00_preprocess.py --variant {args.variant} first.")
+        raise FileNotFoundError(f"{dataset_path} not found. Run script/01_preprocess.py --variant {args.variant} first.")
 
     data = np.load(dataset_path)
     splits_data = _load_split_batches(data)

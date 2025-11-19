@@ -109,7 +109,7 @@ def _read_statement(path: Path) -> pd.DataFrame:
     """Load one Yahoo CSV statement.
 
     Args:
-        path: Location of the CSV exported by `01_download.py`.
+        path: Location of the CSV exported by `00_download.py`.
 
     Returns:
         DataFrame indexed by line-item names with datetime columns.

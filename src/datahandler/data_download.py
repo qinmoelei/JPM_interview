@@ -92,7 +92,7 @@ def run_download_pipeline(config_path: Optional[str] = None, override_frequency:
     return cfg_path
 
 def main(cli_args: Optional[Sequence[str]] = None) -> None:
-    """Simple CLI entry point (invoked by script/00_preprocess.py)."""
+    """Simple CLI entry point (invoked by script/00_download.py)."""
     ap = argparse.ArgumentParser(description="Download raw financial statements for the configured tickers.")
     ap.add_argument(
         "--config",

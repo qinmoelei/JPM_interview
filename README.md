@@ -53,8 +53,8 @@ configs/
 reports/
   report.tex                # LaTeX report / 报告
 script/
-  00_preprocess.py          # EN: clean/normalize raw statements | ZH: 数据预处理
-  01_download.py            # EN/ZH: 下载原始报表
+  00_download.py            # EN/ZH: 下载原始报表
+  01_preprocess.py          # EN: clean/normalize raw statements | ZH: 数据预处理
   02_train.py               # EN/ZH: 训练入口
   03_eval.py                # EN/ZH: 回测入口（示例）
   run_baselines.py          # EN: ARIMA/GARCH baselines + 可视化 | ZH: 统计基准与画图
@@ -68,8 +68,8 @@ script/
 
 ## 工作流 / Workflow
 
-1. **Download（下载）** – `python script/01_download.py --config configs/config.yaml`，批量获取 Yahoo 年/季报。
-2. **Preprocess（预处理）** – `python script/00_preprocess.py --config configs/config.yaml --variant base`。各变体会写入 `data/processed/<variant>/` 并生成 `training_data.npz`、`training_summary.json`，可并行保存多套处理方案（如 `--variant bounded`）。
+1. **Download（下载）** – `python script/00_download.py --config configs/config.yaml`，批量获取 Yahoo 年/季报。
+2. **Preprocess（预处理）** – `python script/01_preprocess.py --config configs/config.yaml --variant base`。各变体会写入 `data/processed/<variant>/` 并生成 `training_data.npz`、`training_summary.json`，可并行保存多套处理方案（如 `--variant bounded`）。
 3. **Train（训练）** – `python script/02_train.py --config configs/config.yaml --variant base [--experiment-tag demo]`。脚本会：
    - 载入 `data/processed/<variant>/training_data.npz`
    - 使用轻量级 SimpleRNN driver net（16 hidden），在 growth space 训练
@@ -90,8 +90,8 @@ script/
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -U -r requirements.txt
-python script/01_download.py --config configs/config.yaml
-python script/00_preprocess.py --config configs/config.yaml
+python script/00_download.py --config configs/config.yaml
+python script/01_preprocess.py --config configs/config.yaml
 python script/02_train.py --config configs/config.yaml
 python script/03_eval.py  --config configs/config.yaml
 ```
