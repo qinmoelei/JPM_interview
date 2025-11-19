@@ -4,7 +4,16 @@ import numpy as np
 from typing import Dict
 
 def compute_drivers(is_df: pd.DataFrame, bs_df: pd.DataFrame, cf_df: pd.DataFrame) -> pd.DataFrame:
-    """Compute driver series: EBITDA margin, COGS ratio, Opex ratio, Capex ratio, DSO/DPO/DIO (rough)."""
+    """Compute driver series: EBITDA margin, cost ratios, Capex ratio, and working-capital days (rough).
+
+    Example:
+        >>> idx = pd.to_datetime(["2020"])
+        >>> is_df = pd.DataFrame({"2020": [100.0, 60.0]}, index=["sales", "cogs"])
+        >>> bs_df = pd.DataFrame({"2020": [5.0, 4.0, 3.0]}, index=["cash", "ar", "ap"])
+        >>> cf_df = pd.DataFrame({"2020": [-20.0]}, index=["capex"])
+        >>> compute_drivers(is_df, bs_df, cf_df).columns[:2].tolist()
+        ['ebitda_margin', 'cogs_ratio']
+    """
     df = pd.DataFrame(index=is_df.columns)
     sales = is_df.loc["sales"] if "sales" in is_df.index else None
     cogs = is_df.loc["cogs"] if "cogs" in is_df.index else None

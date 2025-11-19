@@ -3,13 +3,26 @@ import tensorflow as tf
 
 class CashBudgetLayer(tf.keras.layers.Layer):
     """
-    Deterministic Vélez–Pareja cash-budget + statements layer.
+    Differentiable implementation of the Vélez-Pareja cash-budget & statements engine.
+
     Inputs (per time step):
-      states_{t-1}: [C, INV, K, B_ST, B_LT, RE, PIC, AR, AP, INV_STOCK, OtherA, OtherLE]
-      drivers_t:    [Sales, COGS, Opex, Dep, Capex, r_ST, r_LT, r_INV, Amort_LT, Cbar, EI, Div, tau, DSO, DPO, DIO]
+        states_{t-1}: [C, INV, K, B_ST, B_LT, RE, PIC, AR, AP, INV_STOCK, OtherA, OtherLE]
+        drivers_t: [Sales, COGS, Opex, Dep, Capex, r_ST, r_LT, r_INV, Amort_LT, Cbar, EI, Div, tau, DSO, DPO, DIO]
+
     Outputs:
-      states_t, and key IS components.
-    All operations are differentiable (uses tf.nn.relu for positive-part operator).
+        Next-period states plus key IS components (EBITDA, EBIT, EBT, taxes, NI, interest flows).
+
+    Reference:
+        Vélez-Pareja, I. (2005). "The Cash Budget and Cash Flow Forecast."
+        SSRN: https://papers.ssrn.com/sol3/papers.cfm?abstract_id=742285
+
+    Example:
+        >>> layer = CashBudgetLayer()
+        >>> states_prev = tf.zeros((1, 12))
+        >>> drivers = tf.ones((1, 16))
+        >>> next_states, is_out = layer((states_prev, drivers))
+        >>> next_states.shape
+        TensorShape([1, 12])
     """
     def call(self, inputs):
         states_prev, drivers = inputs

@@ -9,9 +9,23 @@ def build_sequences(features: pd.DataFrame,
                     horizon: int = 1) -> Tuple[np.ndarray, np.ndarray]:
     """
     Build rolling window sequences X (features) and Y (targets) for supervised learning.
-    features: DataFrame indexed by period-end (datetime) with driver columns.
-    targets:  DataFrame indexed by period-end with target columns (e.g., next BS states).
-    Returns: X of shape [N, window, F], Y of shape [N, horizon, T]
+
+    Args:
+        features: DataFrame indexed by period-end (datetime) with driver columns.
+        targets: DataFrame indexed by period-end with target columns (e.g., next BS states).
+        window: Number of historical steps per sample.
+        horizon: Number of prediction steps ahead.
+
+    Returns:
+        Tuple of numpy arrays with shapes `[N, window, F]` and `[N, horizon, T]`.
+
+    Example:
+        >>> idx = pd.to_datetime(["2020", "2021", "2022", "2023"])
+        >>> feats = pd.DataFrame({"capex": [1, 2, 3, 4]}, index=idx)
+        >>> targs = pd.DataFrame({"cash": [10, 11, 12, 13]}, index=idx)
+        >>> X, Y = build_sequences(feats, targs, window=2, horizon=1)
+        >>> X.shape, Y.shape
+        ((2, 2, 1), (2, 1, 1))
     """
     # Align indices and sort
     idx = features.index.intersection(targets.index).sort_values()

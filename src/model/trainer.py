@@ -8,7 +8,12 @@ from .losses import relative_identity_penalty, mse_loss
 from .metrics import identity_violation
 
 class VPForecaster(tf.keras.Model):
-    """Driver nets + deterministic CashBudgetLayer"""
+    """Driver nets + deterministic CashBudgetLayer inspired by Vélez-Pareja cash budgets.
+
+    Reference:
+        Vélez-Pareja, I. (2005). "The Cash Budget and Cash Flow Forecast."
+        SSRN: https://papers.ssrn.com/sol3/papers.cfm?abstract_id=742285
+    """
 
     def __init__(self, cov_dim: int, driver_dim: int = 16, state_dim: int = 10, hidden: int = 16):
         super().__init__()
@@ -25,7 +30,7 @@ class VPForecaster(tf.keras.Model):
         self.cb = CashBudgetLayer()
 
     def call(self, inputs, training=False):
-        """Forward pass: infer driver adjustments then roll CashBudgetLayer."""
+        """Forward pass: infer driver adjustments and roll CashBudgetLayer sequentially."""
         states_seq, covariates_seq = inputs  # shapes: [B,T,state_dim], [B,T,driver_dim]
         drivers_seq = self.driver_net(covariates_seq, training=training)
         outputs_states = []
@@ -49,7 +54,23 @@ def training_step(model: VPForecaster,
                   level_weight: float = 0.3,
                   state_weights: Optional[np.ndarray] = None,
                   eps: float = 1e-6):
-    """One full-batch training step with growth/level/id penalties and masks."""
+    """One full-batch training step with growth/level/id penalties and masks.
+
+    Example:
+        >>> model = VPForecaster(cov_dim=10)
+        >>> dummy = {
+        ...     "states": np.zeros((1, 5, 12), dtype=np.float32),
+        ...     "covs": np.zeros((1, 5, 10), dtype=np.float32),
+        ...     "target_states": np.zeros((1, 5, 12), dtype=np.float32),
+        ...     "state_shift": np.zeros((1, 12), dtype=np.float32),
+        ...     "state_scale": np.ones((1, 12), dtype=np.float32),
+        ...     "transition_mask": np.ones((1, 4), dtype=np.float32),
+        ... }
+        >>> opt = tf.keras.optimizers.Adam(1e-3)
+        >>> result = training_step(model, dummy, opt)  # doctest: +SKIP
+        >>> "loss" in result  # doctest: +SKIP
+        True
+    """
     states_seq = tf.convert_to_tensor(batch["states"], dtype=tf.float32)
     covs_seq = tf.convert_to_tensor(batch["covs"], dtype=tf.float32)
     target_seq = tf.convert_to_tensor(batch["target_states"], dtype=tf.float32)

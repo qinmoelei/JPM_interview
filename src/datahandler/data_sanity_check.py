@@ -54,7 +54,13 @@ MAP_CF = {
 }
 
 def standardize_columns(df: pd.DataFrame, statement: str) -> pd.DataFrame:
-    """Rename common lines to standardized keys (best-effort) and lowercase the rest."""
+    """Rename common lines to standardized keys (best-effort) and lowercase the rest.
+
+    Example:
+        >>> raw = pd.DataFrame({"2020": [1.0]}, index=["Total Revenue"])
+        >>> standardize_columns(raw, "IS").index.tolist()
+        ['sales']
+    """
     if df is None or df.empty:
         return pd.DataFrame()
     df = df.copy()
@@ -76,7 +82,13 @@ def standardize_columns(df: pd.DataFrame, statement: str) -> pd.DataFrame:
     return df
 
 def check_balance_identity(bs_df: pd.DataFrame, tol: float = 1e-6) -> pd.Series:
-    """Return a boolean Series over periods indicating whether Assets == Liabilities + Equity within tolerance."""
+    """Return a boolean Series showing |Assets - (Liab+Equity)| <= tol per period.
+
+    Example:
+        >>> bs = pd.DataFrame({"2020": [10.0, 6.0, 4.0]}, index=["assets", "liab_total", "equity_total"])
+        >>> bool(check_balance_identity(bs)["2020"])
+        True
+    """
     # Yahoo sometimes includes NaNs; align safely
     cols = bs_df.columns
     A = bs_df.loc["assets"].reindex(cols)
@@ -87,6 +99,14 @@ def check_balance_identity(bs_df: pd.DataFrame, tol: float = 1e-6) -> pd.Series:
     return ok
 
 def check_required_lines(is_df: pd.DataFrame, bs_df: pd.DataFrame) -> Dict[str, bool]:
+    """Check presence of essential line items across statements.
+
+    Example:
+        >>> is_df = pd.DataFrame({"2020": [1.0]}, index=["sales"])
+        >>> bs_df = pd.DataFrame({"2020": [2.0]}, index=["assets"])
+        >>> check_required_lines(is_df, bs_df)["sales"]
+        True
+    """
     keys = {
         "sales": "IS",
         "cogs": "IS",

@@ -3,12 +3,23 @@ import tensorflow as tf
 
 
 def mape(y_true: tf.Tensor, y_pred: tf.Tensor, eps: float = 1e-6) -> tf.Tensor:
-    """Mean absolute percentage error (safe when y_true≈0 thanks to eps)."""
+    """Mean absolute percentage error (safe when y_true≈0 thanks to eps).
+
+    Example:
+        >>> float(mape(tf.constant([1.0, 2.0]), tf.constant([1.0, 1.0])))
+        25.0
+    """
     return 100.0 * tf.reduce_mean(tf.abs((y_true - y_pred) / (tf.abs(y_true) + eps)))
 
 
 def identity_violation(states_t: tf.Tensor, eps: float = 1e-6) -> tf.Tensor:
-    """Relative |Assets - (Liab+Equity)| averaged across samples."""
+    """Relative |Assets - (Liab+Equity)| averaged across samples.
+
+    Example:
+        >>> s = tf.ones((1, 12))
+        >>> float(identity_violation(s))
+        0.0
+    """
     (C,
      INV,
      K,

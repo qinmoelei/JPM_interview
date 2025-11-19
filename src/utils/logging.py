@@ -1,6 +1,12 @@
 import logging
 
 def get_logger(name: str = "vp_logger") -> logging.Logger:
+    """Return a module-level logger with a basic console handler (idempotent).
+
+    Example:
+        >>> log = get_logger("demo")
+        >>> log.info("hello")  # doctest: +SKIP
+    """
     logger = logging.getLogger(name)
     if not logger.handlers:
         logger.setLevel(logging.INFO)
