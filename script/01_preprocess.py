@@ -11,29 +11,29 @@ if str(PROJECT_ROOT) not in sys.path:
 import argparse
 
 from src.datahandler.preprocess import run_preprocessing_pipeline
-from src.utils.io import get_default_config_path, load_config
+from src.utils.io import get_default_config_path
 
 
 def main(cli_args: Optional[Sequence[str]] = None) -> None:
     parser = argparse.ArgumentParser(
-        description="Clean, impute, normalize and aggregate raw statements into training tensors."
+        description="Build simulation-ready states/drivers from raw statements."
     )
     parser.add_argument(
         "--config",
         default=get_default_config_path(),
         help="Path to the YAML config file. Defaults to %(default)s or $JPM_CONFIG_PATH if set.",
     )
-    parser.add_argument("--variant", default=None, help="Explicit variant name; defaults to freq_<freq>_<norm>.")
-    parser.add_argument("--norm-method", choices=["scale", "zscore"], default="scale", help="Normalization strategy.")
-    parser.add_argument("--frequency", choices=["quarterly", "annual"], default=None, help="Override frequency for preprocessing.")
+    parser.add_argument("--variant", default="simulation", help="Output subdirectory name under data/processed.")
+    parser.add_argument(
+        "--frequency",
+        choices=["quarterly", "annual"],
+        default=None,
+        help="Override frequency for preprocessing (defaults to config frequency).",
+    )
     args = parser.parse_args(cli_args)
-    cfg = load_config(args.config)
-    frequency = args.frequency or cfg.frequency
-    variant = args.variant or f"freq_{frequency}_{args.norm_method}"
     run_preprocessing_pipeline(
         args.config,
-        variant=variant,
-        norm_method=args.norm_method,
+        variant=args.variant,
         override_frequency=args.frequency,
     )
 

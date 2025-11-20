@@ -54,31 +54,27 @@ reports/
   report.tex                # LaTeX report / 报告
 script/
   00_download.py            # EN/ZH: 下载原始报表
-  01_preprocess.py          # EN: clean/normalize raw statements | ZH: 数据预处理
-  02_train.py               # EN/ZH: 训练入口
+  01_preprocess.py          # EN: build simulation-ready states/drivers | ZH: 生成仿真输入
+  02_train.py               # EN/ZH: 仿真入口（deterministic simulator）
   03_eval.py                # EN/ZH: 回测入口（示例）
-  run_baselines.py          # EN: ARIMA/GARCH baselines + 可视化 | ZH: 统计基准与画图
+  run_baselines.py          # EN: quick scenario sims | ZH: 简易情景仿真
 ```
 
-- `configs/` 集中管理下载/预处理/训练参数（含 rolling window、split、loss 权重）。
-- `src/datahandler/` 负责下载、数据清洗、特征工程与 V2 mask 数据集生成。
-- `src/model/` 内含 CashBudgetLayer、损失、指标与训练循环（growth-first loss + identity penalty）。
-- `script/` 下的 `00/01/02` 是 CLI workflow，`run_baselines.py` 汇总统计基准并与神经模型比较。
+- `configs/` 集中管理下载/预处理/仿真参数（含频率、路径设置）。
+- `src/datahandler/` 现在专注于把 Yahoo IS/BS/CF 对齐、抽取稳健的 line item、计算 driver 比率，直接生成仿真输入。
+- `src/model/` 提供 deterministic accounting simulator，可逐期滚动现金预算而无需神经网络。
+- `script/` 下的 `00/01/02` 是 CLI workflow，`run_baselines.py` 用于快速尝试简单情景扰动。
 - `tests/` 提供轻量合成测试保证恒等式、下载器、特征计算等模块最小正确性。
 
 ## 工作流 / Workflow
 
 1. **Download（下载）** – `python script/00_download.py --config configs/config.yaml`，批量获取 Yahoo 年/季报。
-2. **Preprocess（预处理）** – `python script/01_preprocess.py --config configs/config.yaml --variant base`。各变体会写入 `data/processed/<variant>/` 并生成 `training_data.npz`、`training_summary.json`，可并行保存多套处理方案（如 `--variant bounded`）。
-3. **Train（训练）** – `python script/02_train.py --config configs/config.yaml --variant base [--experiment-tag demo]`。脚本会：
-   - 载入 `data/processed/<variant>/training_data.npz`
-   - 使用轻量级 SimpleRNN driver net（16 hidden），在 growth space 训练
-   - 将 loss/metrics 分别写入 `results/run_<timestamp>/training_logs.json`
-   - 在同一目录保存 `learner.json`（配置+模型+设备）与 `model.weights.h5`。
-4. **Compare（统计基准）** – 训练脚本会自动调用 `script/run_baselines.py`，在同一个 run 目录生成 `baseline_metrics.json` 与 `arima_samples.png`（2×2 子图展示 ARIMA 拟合 vs 真实轨迹）。你也可以手动运行：
-   ```bash
-   python script/run_baselines.py --config configs/config.yaml --variant base --run-dir results/run_YYYYMMDD_HHMMSS
-   ```
+2. **Preprocess（预处理）** – `python script/01_preprocess.py --config configs/config.yaml --variant simulation`。每个 ticker 会写入 `data/processed/<variant>/<ticker>_states.csv`、`<ticker>_drivers.csv` 与 `<ticker>_simulation.npz`（含状态矩阵 + driver 序列），同时生成 `simulation_summary.json` 可追踪可用年份。
+3. **Simulate（仿真）** – `python script/02_train.py --config configs/config.yaml --variant simulation [--max-tickers 10]`。脚本会：
+   - 载入每个 ticker 的初始状态 + driver 序列
+   - 使用 deterministic accounting simulator 逐期推演
+   - 将 MAE / 资产负债平衡误差写入 `results/simulation_<timestamp>/simulation_metrics.json`
+4. **Scenario（情景）** – `python script/run_baselines.py --config configs/config.yaml --variant simulation --tickers AAPL MSFT --growth-delta 0.02` 可对 driver 做简单扰动（如增长上调 2pp）并快速查看仿真变化。
 5. **Evaluate（评估）** – `python script/03_eval.py --config configs/config.yaml` 仍可作为自定义回测入口。
 
 > **环境提示**：推荐使用 `conda run -n jpmc <command>` 与本地测试一致。
@@ -93,7 +89,7 @@ pip install -U -r requirements.txt
 python script/00_download.py --config configs/config.yaml
 python script/01_preprocess.py --config configs/config.yaml
 python script/02_train.py --config configs/config.yaml
-python script/03_eval.py  --config configs/config.yaml
+python script/run_baselines.py --config configs/config.yaml --tickers AAPL
 ```
 
 ## References
@@ -101,11 +97,10 @@ python script/03_eval.py  --config configs/config.yaml
 ### 关键函数 / Key Functions
 
 - `data_download.download_universe` – EN: stream-downloads Yahoo statements with logging & retries. ZH: 批量下载 Yahoo 报表并记录失败信息。
-- `preprocess.run_preprocessing_pipeline` – EN: imputes NaNs (zero/ffill/interp/constraints), enforces `Assets = Liabilities + Equity`, normalizes firms by median sales/asset scale, and exports Vélez–Pareja style state/driver tensors. ZH: 按现金预算→IS→BS 顺序处理缺失、约束并归一化，输出训练所需的状态与驱动序列。
-- `training_data.npz` – 现在额外包含 `mask_{split}`，用来指示某窗口里哪些 transition 属于 train/val/test，从而实现 “历史共享 + 时间有序” 的监督。
-- `data/processed/<variant>/training_summary.json` – 新增分层结构，记录 seq_len、样本数、协变量列名；可同时保存多个预处理版本，方便 A/B 实验。
-- `results/run_*/` – 每次训练自动生成独立目录，内含 `learner.json`、`training_logs.json`、`model.weights.h5`、`baseline_metrics.json`、`arima_samples.png`，便于复现实验与汇报。
-- `CashBudgetLayer` – EN: deterministic CB layer used during training to keep causality `CB → IS → BS`. ZH: 现金预算层确保先决现金策略再推导 IS/BS，避免循环与“塞数”。
+- `preprocess.build_simulation_frames` – EN: loads raw IS/BS/CF, picks robust line items, derives Vélez-Pareja style states + driver ratios without heavy scaling. ZH: 读取三张表，按候选名称聚合出核心状态与 driver，比对年份自动对齐，生成仿真输入。
+- `data/processed/<variant>/*_simulation.npz` – stores `states`（T×12）与 `drivers`（(T-1)×11），便于直接喂入 simulator，并包含 `simulation_summary.json` 方便巡查可用窗口。
+- `model.simulator.AccountingSimulator` – EN: deterministic layer that enforces working-capital + financing logic; perfect to stress-test scenarios before ML. ZH: 仿真引擎内置现金预算逻辑，确保 `Assets = Liabilities + Equity`，可先跑情景再考虑机器学习。
+- `script/run_baselines.py` – EN: light CLI to perturb drivers (e.g., +200 bps growth) and observe path deltas. ZH: 轻量 CLI 支持对 driver 做简单情景冲击，快速查看现金/负债演化。
 - `get_default_config_path` – EN: resolves `$JPM_CONFIG_PATH` or repo default for every CLI. ZH: 自动定位配置文件，方便脚本无参运行。
 
 ### References 参考文献
