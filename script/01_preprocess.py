@@ -23,7 +23,12 @@ def main(cli_args: Optional[Sequence[str]] = None) -> None:
         default=get_default_config_path(),
         help="Path to the YAML config file. Defaults to %(default)s or $JPM_CONFIG_PATH if set.",
     )
-    parser.add_argument("--variant", default="simulation", help="Output subdirectory name under data/processed.")
+    parser.add_argument(
+        "--variant",
+        default=None,
+        help="Output subdirectory name under data/processed. "
+        "If omitted, will default to 'year' / 'quarter' based on frequency.",
+    )
     parser.add_argument(
         "--frequency",
         choices=["quarterly", "annual"],

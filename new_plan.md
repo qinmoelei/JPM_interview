@@ -1,494 +1,549 @@
-# Accounting Tank 模型说明（Markdown 版）
+## 0. 模型世界的约定
 
-> 本文：  
-> 1. 定义状态向量 \(y_t\) 和 driver 向量 \(x_t\)  
-> 2. 给出 12 个演化方程 \(y_{t+1} = f(y_t, x_t)\)  
-> 3. 给出 11 个 driver 的反演公式 \(x_t^\* = g(y_t, y_{t+1}, \text{报表行})\)  
-> 4. 说明数据预处理 / 建模 / 回测整体流程
+我们只显式建模这几类资产负债：
+
+- 资产：`CASH, AR, INV, PPE`
+- 负债：`AP, DEBT`
+- 其他所有资产/负债（预付、其他应收、递延项目等）**不单独建模，它们的影响被折叠到“外部权益变动 ΔEQ_ext”里**。
+
+因此在**模型世界**里约定：
+
+\[
+ASSETS_t^{model} = CASH_t + AR_t + INV_t + PPE_t
+\]
+
+\[
+LIAB_t^{model}   = AP_t + DEBT_t
+\]
+
+\[
+EQ_t^{model}     = ASSETS_t^{model} - LIAB_t^{model}
+\]
+
+如果你已经在预处理里把报表里的 `eq` / `re` 换成了这一口径（再配上 clean surplus 滚动 RE），那它们就直接是下面用的 `EQ_t` 和 `RE_t`。
 
 ---
 
-## 0. 基本设定与记号
+## 1. 从原始三表构造 15 维状态向量 \(y_t\)
 
-时间 \(t\)：按年记（如 2021, 2022, ...），对应报表的 2021‑10‑31 等那一列。
+对每个年份 \(t\)，从三张年报中读取（列名示意）：
 
-我们只用三张原始报表的 index：
+- **损益表 IS：**
+  - `sales_t`
+  - `cogs_t`
+  - `opex_t`（销售+管理等）
+  - `depreciation_t`
+  - `income_tax_expense_t`
+  - `interest_expense_t`
+  - `dividend_paid_t`（注意取绝对值，表示现金流出）
 
-- `A_IS_annual.csv`：Income Statement（IS）
-- `A_BS_annual.csv`：Balance Sheet（BS）
-- `A_CF_annual.csv`：Cash Flow（CF）
+- **资产负债表 BS：**
+  - `cash_and_equivalents_t`
+  - `accounts_receivable_t`
+  - `inventory_t`
+  - `accounts_payable_t`
+  - `net_ppe_t`
+  - `total_interest_bearing_debt_t`（短 + 长）
 
-主键类似：
+- **保留盈余 RE：**
+  - 如果已经有「模型口径」RE 列，直接用；
+  - 如果没有，可以按 clean surplus 自己滚动一遍（见 1.2）。
 
-- 公司：`firm_id` 或 `ticker`
-- 年份：`year` 或 `fiscal_year`
+### 1.1 模型口径的 EQ
 
----
+用简化资产负债表重构「模型 EQ」：
 
-## 1. 状态向量 \(y_t\)（12 维）
+\[
+ASSETS_t^{model} = CASH_t + AR_t + INV_t + PPE_t
+\]
 
-### 1.1 定义
+\[
+LIAB_t^{model}   = AP_t + DEBT_t
+\]
 
-选一个「最小但够用」的状态向量：
+\[
+EQ_t^{model}     = ASSETS_t^{model} - LIAB_t^{model}
+\]
+
+如果你已经在 CSV 里写好了这个结果，就直接把那一列当作 `EQ_t`。
+
+### 1.2 可选：clean surplus 生成 RE（如果不用报表 RE）
+
+先用 IS 数据算当期净利润：
+
+\[
+EBIT_t = S_t - C_t - SG_t - D_t
+\]
+
+\[
+EBT_t = EBIT_t - INT_t
+\]
+
+\[
+NI_t  = EBT_t - TAX_t
+\]
+
+然后按 clean surplus：
+
+\[
+RE_t^{model} = RE_{t-1}^{model} + NI_t - DIV_t
+\]
+
+### 1.3 15 维状态向量定义
+
+定义每一年 \(t\) 的 15 维 state：
 
 \[
 y_t =
 \big(
 S_t, C_t, SG_t, D_t,\;
 AR_t, INV_t, AP_t,\;
-PPE_t,\; CASH_t,\; DEBT_t,\; EQ_t,\; RE_t
+PPE_t,\; CASH_t,\; DEBT_t,\;
+EQ_t,\; RE_t,\;
+TAX_t,\; INT_t,\; DIV_t
 \big)
 \]
 
-其中：
+对应原始列：
 
-- \(S_t\) = `sales_t`
-- \(C_t\) = `cogs_t`
-- \(SG_t\) = `opex_t`
-- \(D_t\) = `reconciled_depreciation_t`
-- \(AR_t\) = `ar_t`
-- \(INV_t\) = `inv_stock_t`
-- \(AP_t\) = `ap_t`
-- \(PPE_t\) = `net_ppe_t`（Vélez‑Pareja 里的 NFA tank）
-- \(CASH_t\) = `cash_t`
-- \(DEBT_t\) = `total_debt_t`
-- \(EQ_t\) = `stockholders_equity_t`
-- \(RE_t\) = `re_t`（cumulated retained earnings tank）
+- **Flow 型（当期损益 / 现金流）**
+  - \(S_t\)：IS.`sales_t`
+  - \(C_t\)：IS.`cogs_t`
+  - \(SG_t\)：IS.`opex_t`
+  - \(D_t\)：IS.`depreciation_t`
+  - \(TAX_t\)：IS.`income_tax_expense_t`
+  - \(INT_t\)：IS.`interest_expense_t`
+  - \(DIV_t\)：CF.`dividend_paid_t`（取正）
 
-可以按两类理解：
+- **Tank 型（期末余额）**
+  - \(AR_t\)：BS.`accounts_receivable_t`
+  - \(INV_t\)：BS.`inventory_t`
+  - \(AP_t\)：BS.`accounts_payable_t`
+  - \(PPE_t\)：BS.`net_ppe_t`
+  - \(CASH_t\)：BS.`cash_and_equivalents_t`
+  - \(DEBT_t\)：BS.`total_interest_bearing_debt_t`
+  - \(EQ_t\)：上面定义的 \(EQ_t^{model}\)（或你预先算好的）
+  - \(RE_t\)：clean surplus 生成的 RE 或报表 RE（只要口径一致）
 
-- **flow 型（流量）**：`sales`, `cogs`, `opex`, `reconciled_depreciation`
-- **tank 型（存量 / reservoir）**：`ar`, `inv_stock`, `ap`, `net_ppe`, `cash`, `total_debt`, `stockholders_equity`, `re`
-
-后面所有演化方程，本质都是「tank 的下一个水位 = 当前水位 + 流入 − 流出」，完全是 Vélez‑Pareja 的 tank 视角离散化。
+> 之后所有 forward / inverse / 评估，都以这套 15 维 state 为准，不再用原始 total_equity_book。
 
 ---
 
-## 2. 驱动向量 \(x_t\)（11 维）
+## 2. 13 维 driver 向量 \(x_t\)
 
-### 2.1 定义
+driver 是「政策参数」，用来驱动 state 的演化：
 
 \[
 x_t =
-(gS_t, gm_t, sga_t, dep_t,\; dso_t, dio_t, dpo_t,\; capex_t,\; \tau_t,\; r_t,\; pay_t)
+\big(
+gS_t, gm_t, sga_t, dep_t,\;
+dso_t, dio_t, dpo_t,\;
+capex_t,\;
+\tau_t, r_t, pay_t,\;
+ndebt_t,\; nequity_t
+\big)
 \]
 
-对应 Python driver 名：
+含义如下：
 
-- `g_sales` = \(gS_t\)（销售增速）
-- `gross_margin` = \(gm_t\)（毛利率）
-- `opex_ratio` = \(sga_t\)
-- `dep_rate` = \(dep_t\)
-- `dso`, `dio`, `dpo`（周转天数）
-- `capex_sales_ratio` = \(capex_t\)
-- `tax_rate` = \(\tau_t\)
-- `int_rate` = \(r_t\)
-- `payout_ratio` = \(pay_t\)
+1. **经营结构相关：**
 
-约定：变量都在正常金融区间（销售、成本、PPE、债务 ≥ 0，比例在 \([0,1]\) 左右），所以数学公式里**不写 ReLU / clip**，但实现时会用 `max` / `min` 来处理负值、上界等问题。
+- \(gS_t\)：`g_sales`，销售增速  
+- \(gm_t\)：`gross_margin`，毛利率  
+- \(sga_t\)：`opex_ratio`，Opex / Sales  
+- \(dep_t\)：`dep_rate`，当期折旧率（对期初 PPE）
+
+2. **营运资金 policy：**
+
+- \(dso_t\)：`dso`，应收账款周转天数  
+- \(dio_t\)：`dio`，存货周转天数  
+- \(dpo_t\)：`dpo`，应付账款周转天数  
+
+3. **Capex policy：**
+
+- \(capex_t\)：`capex_sales_ratio`，Capex / Sales
+
+4. **税 / 利息 / 分红：**
+
+- \(\tau_t\)：`tax_rate`，有效税率  
+- \(r_t\)：`int_rate`，债务利率（对期初 DEBT）  
+- \(pay_t\)：`payout_ratio`，分红率（对当期 NI）
+
+5. **融资决策（最关键）：**
+
+- \(ndebt_t\)：`net_debt_issuance_ratio`，净举债 / Sales  
+  \[
+  \Delta DEBT_t = ndebt_t \cdot S_t
+  \]
+- \(nequity_t\)：`net_equity_issuance_ratio`，净「外部权益流入」/ Sales  
+  \[
+  \Delta EQ_t^{ext} = nequity_t \cdot S_t
+  \]
+
+> 注意：\(\Delta EQ_t^{ext}\) 在模型里不仅包含真实的增发/回购，  
+> 还吸收了我们**没显式建模的其他资产/负债流**对权益的综合影响。
 
 ---
 
-## 3. 演化方程：\(y_{t+1} = f(y_t, x_t)\)
+## 3. Forward：一步模拟 \(y_t = f(y_{t-1}, x_t)\)
 
-下面 12 个方程给出状态向量的逐年演化关系。
+`simulate` 本质上就是在时间维度 for 循环，一次调用这个 `forward_step`。
 
-### (1) 销售
-
-\[
-\boxed{S_{t+1} = S_t \,(1 + gS_t)}
-\]
-
----
-
-### (2) 成本（COGS）
+假设上一期 state \(y_{t-1}\) 全部已知：
 
 \[
-\boxed{C_{t+1} = (1 - gm_t)\, S_{t+1}}
+y_{t-1} =
+\big(
+S_{t-1}, C_{t-1}, SG_{t-1}, D_{t-1},
+AR_{t-1}, INV_{t-1}, AP_{t-1},
+PPE_{t-1}, CASH_{t-1}, DEBT_{t-1},
+EQ_{t-1}, RE_{t-1},
+TAX_{t-1}, INT_{t-1}, DIV_{t-1}
+\big)
 \]
 
-由毛利率定义 \(gm_t = 1 - C_{t+1}/S_{t+1}\)。
+### 3.1 经营块：Sales / COGS / Opex / Dep
 
----
-
-### (3) 运营费用（Opex）
+1. 销售：
 
 \[
-\boxed{SG_{t+1} = sga_t \, S_{t+1}}
+S_t = S_{t-1} \cdot (1 + gS_t)
 \]
 
----
-
-### (4) 折旧 \(D_{t+1} = \text{reconciled_depreciation}_{t+1}\)
-
-\[
-\boxed{D_{t+1} = dep_t \, PPE_t}
-\]
-
-对应 Vélez‑Pareja 09 里 Net Fixed Assets tank 的折旧流出。
-
----
-
-### (5) 应收账款 AR（DSO）
-
-\[
-\boxed{AR_{t+1} = \dfrac{dso_t}{365}\, S_{t+1}}
-\]
-
----
-
-### (6) 存货 INV（DIO）
-
-\[
-\boxed{INV_{t+1} = \dfrac{dio_t}{365}\, C_{t+1}}
-\]
-
----
-
-### (7) 应付账款 AP（DPO）
-
-\[
-\boxed{AP_{t+1} = \dfrac{dpo_t}{365}\, C_{t+1}}
-\]
-
-这三项对应 VP 论文中库存 / 应收 / 应付 tank 的「天数法」离散形式。
-
----
-
-### (8) 固定资产 tank：PPE
-
-定义 Capex：
-
-\[
-CAPEX_{t+1} = capex_t \, S_{t+1}
-\]
-
-Net Fixed Assets (NFA) tank 方程（VP 09 式 (3a)）：
-
-\[
-\boxed{
-PPE_{t+1}
-= PPE_t + CAPEX_{t+1} - D_{t+1}
-= PPE_t + capex_t\, S_{t+1} - D_{t+1}
-}
-\]
-
----
-
-### (9) 税前利润 / 净利润（中间量）
-
-这些不在 \(y_t\) 里，但用来驱动现金 / 债务 / 权益演化。
+2. 成本、费用、折旧：
 
 \[
 \begin{aligned}
-EBIT_{t+1} &= S_{t+1} - C_{t+1} - SG_{t+1} - D_{t+1} \\
-INT_{t+1} &= r_t \, DEBT_t \\
-EBT_{t+1} &= EBIT_{t+1} - INT_{t+1} \\
-NI_{t+1}  &= (1 - \tau_t)\,EBT_{t+1}
+C_t  &= (1 - gm_t) \cdot S_t \\
+SG_t &= sga_t \cdot S_t \\
+D_t  &= dep_t \cdot PPE_{t-1}
 \end{aligned}
 \]
 
-（实现里 `NOPAT = EBT * (1-tax)`，这里直接记作 \(NI\)。）
+### 3.2 营运资金：AR / INV / AP
+
+根据 DSO / DIO / DPO 直接给 tank：
+
+\[
+\begin{aligned}
+AR_t  &= \frac{dso_t}{365} \cdot S_t \\
+INV_t &= \frac{dio_t}{365} \cdot C_t \\
+AP_t  &= \frac{dpo_t}{365} \cdot C_t
+\end{aligned}
+\]
+
+定义简化营运资本：
+
+\[
+WC_t     = AR_t + INV_t - AP_t
+\]
+
+\[
+WC_{t-1} = AR_{t-1} + INV_{t-1} - AP_{t-1}
+\]
+
+\[
+\Delta WC_t = WC_t - WC_{t-1}
+\]
+
+### 3.3 Capex & PPE
+
+\[
+CAPEX_t = capex_t \cdot S_t
+\]
+
+\[
+PPE_t = PPE_{t-1} + CAPEX_t - D_t
+\]
+
+### 3.4 P&L：INT / TAX / NI / DIV
+
+\[
+EBIT_t = S_t - C_t - SG_t - D_t
+\]
+
+\[
+INT_t = r_t \cdot DEBT_{t-1}
+\]
+
+\[
+EBT_t = EBIT_t - INT_t
+\]
+
+\[
+TAX_t = \tau_t \cdot \max(EBT_t, 0)
+\]
+
+\[
+NI_t = EBT_t - TAX_t
+\]
+
+\[
+DIV_t = pay_t \cdot \max(NI_t, 0)
+\]
+
+### 3.5 FCF
+
+\[
+FCF_t = NI_t + D_t - \Delta WC_t - CAPEX_t
+\]
+
+### 3.6 融资 & Tanks 更新
+
+**债务：**
+
+\[
+\Delta DEBT_t = ndebt_t \cdot S_t
+\]
+
+\[
+DEBT_t = DEBT_{t-1} + \Delta DEBT_t
+\]
+
+**保留盈余（clean surplus）：**
+
+\[
+RE_t = RE_{t-1} + NI_t - DIV_t
+\]
+
+**外部权益净流入：**
+
+\[
+\Delta EQ_t^{ext} = nequity_t \cdot S_t
+\]
+
+**总权益：**
+
+\[
+EQ_t = EQ_{t-1} + \Delta EQ_t^{ext} + NI_t - DIV_t
+\]
+
+> 只要初始时满足  
+> \(EQ_0 = CASH_0 + AR_0 + INV_0 + PPE_0 - AP_0 - DEBT_0\)，  
+> 且每一步 CASH 按下面的现金恒等式更新，  
+> 这条等式在所有 \(t\) 都会自动保持，不需要再手动「重平衡」。
+
+**现金 tank（核心恒等式）：**
+
+\[
+CASH_t
+= CASH_{t-1}
++ FCF_t
++ \Delta DEBT_t
++ \Delta EQ_t^{ext}
+- DIV_t
+\]
+
+最终得到新一年的 state：
+
+\[
+y_t =
+\big(
+S_t, C_t, SG_t, D_t,
+AR_t, INV_t, AP_t,
+PPE_t, CASH_t, DEBT_t,
+EQ_t, RE_t,
+TAX_t, INT_t, DIV_t
+\big)
+\]
 
 ---
 
-### (10) 营运资本变化 & 类 FCF
+## 4. Perfect 反演：从 \((y_{t-1}^{data}, y_t^{data})\) 反推出 \(x_t^\*\)
 
-营运资本定义：
+现在反过来：  
+
+给定真实数据构造好的两期「模型 state」：
+
+- 上一年：\(y_{t-1}^{data}\)  
+- 当年：\(y_t^{data}\)
+
+直接从这两期 state 里**反推出一组 driver \(x_t^\*\)**，使得：
 
 \[
-\begin{aligned}
-WC_t      &= AR_t + INV_t - AP_t\\
-WC_{t+1}  &= AR_{t+1} + INV_{t+1} - AP_{t+1}\\
-\Delta WC_{t+1} &= WC_{t+1} - WC_t
-\end{aligned}
+f\big(y_{t-1}^{data}, x_t^\*\big) \approx y_t^{data}
 \]
 
-Capex 前面已定义，得到类 FCF：
+理论上在不考虑浮点误差的情况下应该是完全一致。
+
+记 \(\varepsilon\) 是一个很小的数（例如 \(10^{-6}\)），防止除 0。
+
+### 4.1 经营 & 营运资金 8 个 driver
+
+1. 销售增速 \(gS_t\)：
 
 \[
-\boxed{
-FCF^{(like)}_{t+1}
-= NI_{t+1} + D_{t+1} - \Delta WC_{t+1} - CAPEX_{t+1}
-}
+gS_t^\* = \frac{S_t - S_{t-1}}{\max(S_{t-1}, \varepsilon)}
 \]
 
----
-
-### (11) 债务 & 现金：DEBT, CASH
-
-先定义股利和「盈余」：
+2. 毛利率 \(gm_t\)：
 
 \[
-\begin{aligned}
-DIV_{t+1} &= pay_t \,\max(NI_{t+1}, 0) \\
-surplus_{t+1} &= FCF^{(like)}_{t+1} - DIV_{t+1}
-\end{aligned}
+gm_t^\* = 1 - \frac{C_t}{\max(S_t, \varepsilon)}
 \]
 
-还债 / 新借款：
+3. Opex 比例 \(sga_t\)：
 
 \[
-\begin{aligned}
-repay_{t+1}  &= \min\big(\max(surplus_{t+1},0),\; DEBT_t\big) \\
-borrow_{t+1} &= \max(-surplus_{t+1}, 0)
-\end{aligned}
+sga_t^\* = \frac{SG_t}{\max(S_t,\varepsilon)}
+\]
+
+4. 折旧率 \(dep_t\)：
+
+\[
+dep_t^\* = \frac{D_t}{\max(PPE_{t-1},\varepsilon)}
+\]
+
+5–7. DSO / DIO / DPO：
+
+\[
+dso_t^\* = 365 \cdot \frac{AR_t}{\max(S_t,\varepsilon)}
+\]
+
+\[
+dio_t^\* = 365 \cdot \frac{INV_t}{\max(C_t,\varepsilon)}
+\]
+
+\[
+dpo_t^\* = 365 \cdot \frac{AP_t}{\max(C_t,\varepsilon)}
+\]
+
+8. Capex / Sales 比 \(capex_t\)：
+
+从 PPE tank 方程反解：
+
+\[
+CAPEX_t^{data} = PPE_t - PPE_{t-1} + D_t
+\]
+
+\[
+capex_t^\* = \frac{CAPEX_t^{data}}{\max(S_t,\varepsilon)}
+\]
+
+### 4.2 税 / 利息 / 分红 3 个 driver
+
+先用 state 里的数据重算 EBIT / EBT / NI：
+
+\[
+EBIT_t^{data} = S_t - C_t - SG_t - D_t
+\]
+
+\[
+EBT_t^{data}  = EBIT_t^{data} - INT_t
+\]
+
+\[
+NI_t^{data}   = EBT_t^{data} - TAX_t
+\]
+
+9. 利率 \(r_t\)：
+
+\[
+r_t^\* = \frac{INT_t}{\max(DEBT_{t-1}, \varepsilon)}
+\]
+
+10. 税率 \(\tau_t\)：
+
+\[
+\tau_t^\* =
+\begin{cases}
+\frac{TAX_t}{\max(EBT_t^{data},\varepsilon)}, & EBT_t^{data} > 0 \\
+0, & EBT_t^{data} \le 0
+\end{cases}
+\]
+
+11. 分红率 \(pay_t\)：
+
+\[
+pay_t^\* = \frac{DIV_t}{\max(NI_t^{data},\varepsilon)}
+\]
+
+### 4.3 融资相关 2 个 driver
+
+12. 净举债 / Sales：`net_debt_issuance_ratio`
+
+\[
+\Delta DEBT_t^{data} = DEBT_t - DEBT_{t-1}
+\]
+
+\[
+ndebt_t^\* = \frac{\Delta DEBT_t^{data}}{\max(S_t,\varepsilon)}
+\]
+
+13. 净外部权益流入 / Sales：`net_equity_issuance_ratio`
+
+利用 clean surplus：
+
+\[
+EQ_t = EQ_{t-1} + \Delta EQ_t^{ext} + NI_t^{data} - DIV_t
+\]
+
+整理得到：
+
+\[
+\Delta EQ_t^{ext\,data}
+= EQ_t - EQ_{t-1} - (NI_t^{data} - DIV_t)
 \]
 
 于是：
 
 \[
-\boxed{
-DEBT_{t+1} = DEBT_t - repay_{t+1} + borrow_{t+1}
-}
+nequity_t^\*
+= \frac{\Delta EQ_t^{ext\,data}}{\max(S_t,\varepsilon)}
 \]
 
-\[
-\boxed{
-CASH_{t+1} = CASH_t + \max(surplus_{t+1} - repay_{t+1}, 0)
-}
-\]
+> 由于 EQ 在预处理阶段就是按  
+> \(EQ_t = CASH_t + AR_t + INV_t + PPE_t - AP_t - DEBT_t\)  
+> 定义出来的，任何「未建模的其他资产/负债变动」都会通过 CASH / DEBT 的变化体现在 EQ 上，  
+> 最终全部被 \(\Delta EQ_t^{ext\,data}\) 吃掉，  
+> 所以 `nequity_t^\*` 里已经含有「真实增发/回购 + 残差项」，  
+> 这样 forward 的现金恒等式就能严格闭合，从而可以做到 perfect ≈ 0。
 
 ---
 
-### (12) RE & EQ：权益 tanks + 会计恒等式
+## 5. 和现有流水线的关系（简要）
 
-保留盈余（Clean Surplus）：
+只要满足：
 
-\[
-\boxed{
-RE_{t+1} = RE_t + NI_{t+1} - DIV_{t+1}
-}
-\]
+1. 预处理时 state 里的 `EQ` / `RE` 已按模型口径重算（见第 1 节）；
+2. forward 用的是第 3 节的公式，尤其是现金恒等式：
+   \[
+   CASH_t = CASH_{t-1} + FCF_t + \Delta DEBT_t + \Delta EQ_t^{ext} - DIV_t
+   \]
+3. perfect 反演用的是第 4 节的 13 个公式，
 
-临时权益（不含 residual）：
+那么对于历史数据：
 
-\[
-EQ^{core}_{t+1} = EQ_t + NI_{t+1} - DIV_{t+1}
-\]
+- 用反演得到的 \(x_t^\*\) 丢回 forward，理论上可以精确还原 \(y_t^{data}\)（只差浮点误差）；
+- 所谓“其他资产/负债导致 perfect 做不到 0”的问题，在这套构造下被折叠进 `nequity_t` 这一个 driver 中，不再破坏闭合。
 
-资产端：
-
-\[
-ASSETS_{t+1} = CASH_{t+1} + AR_{t+1} + INV_{t+1} + PPE_{t+1}
-\]
-
-负债 + 权益核心部分：
-
-\[
-L\&E^{core}_{t+1} = AP_{t+1} + DEBT_{t+1} + EQ^{core}_{t+1}
-\]
-
-为了强行让资产负债表平（不靠 plug，而是把差额塞进 equity residual），代码里做：
-
-\[
-\boxed{
-EQ_{t+1}
-= EQ^{core}_{t+1} + \big(ASSETS_{t+1} - L\&E^{core}_{t+1}\big)
-}
-\]
-
-至此，12 个分量的演化方程全部由 \(y_t\) 和 \(x_t\) 决定。
 
 ---
 
-## 4. 11 个 driver 的反演：\(x_t^\* = g(y_t, y_{t+1}, \text{报表行})\)
+### 4.4 「完美反演」为何成立（直觉解释）
 
-现在换方向：
+- forward 里，每一个 \(y_t\) 的分量都只依赖：
+  - \(y_{t-1}\) 中的 tank（\(PPE_{t-1}, AR_{t-1}, INV_{t-1}, AP_{t-1}, CASH_{t-1}, DEBT_{t-1}, EQ_{t-1}, RE_{t-1}\) 等），以及  
+  - 当期 driver \(x_t\)。
+- inverse 部分，我们正好把这些 driver 用**等价定义**反了回来 ——  
+  每条 driver 要么是「某个比率 / 周转天数」，要么是「某个差分 / Sales」。
 
-> 已知真实世界的 \(y_t^{data}, y_{t+1}^{data}\)（来自三张报表），构造「完美 driver」 \(x_t^\* \)。
+只要原始三张报表在会计上自洽（IS / BS / CF 挂得上），则：
 
-这里的 \(x_t^\*\) 是「在 forward 模型下，恰好把 \(y_t^{data}\) 演化到 \(y_{t+1}^{data}\) 的那一组 driver」，用于后面做时间序列建模。
+- 真实世界生成 \(y_{t-1}^{data} \to y_t^{data}\) 的 hidden policy，  
+  都可以在这套参数化里映射到一组 \(x_t^\*\)；
+- 用这组 \(x_t^\*\) 回跑 forward 方程，会得到同一组 \(y_t^{data}\)（数值上只差舍入误差）。
 
-注意：驱动 \(t \to t+1\) 的 driver \(x_t^\*\) 依赖 \(t\) 和 \(t+1\) 两期数据。
+换句话说：
 
----
+> - 旧版：融资部分靠硬编码的 if / max 规则；  
+> - 新版：融资行为浓缩进两个 driver：**净举债 & 净增发**，  
+>   这两个完全由两期 BS + NI/DIV 反演出来，forward / inverse 都是显式的代数关系。
 
-### 4.1 只靠 12 维状态就能反演的 8 个 driver
+这样，你后面要做任何时间序列 / 生成模型时：
 
-这 8 个可以完全用前面的 forward 方程直接反解。
-
-1. **销售增速 `g_sales`**
-
-\[
-\boxed{
-gS_t
-= \dfrac{S_{t+1} - S_t}{S_t}
-}
-\quad (S_t > 0)
-\]
-
----
-
-2. **毛利率 `gross_margin`**
-
-由 \(C_{t+1} = (1 - gm_t) S_{t+1}\) 得：
-
-\[
-\boxed{
-gm_t
-= 1 - \dfrac{C_{t+1}}{S_{t+1}}
-}
-\]
-
----
-
-3. **Opex 比例 `opex_ratio`**
-
-由 \(SG_{t+1} = sga_t S_{t+1}\) 得：
-
-\[
-\boxed{
-sga_t
-= \dfrac{SG_{t+1}}{S_{t+1}}
-}
-\]
-
----
-
-4. **折旧率 `dep_rate`**
-
-\[
-\boxed{
-dep_t
-= \dfrac{D_{t+1}}{PPE_t}
-}
-\quad (PPE_t > 0)
-\]
-
----
-
-5. **DSO**
-
-\[
-\boxed{
-dso_t
-= 365 \cdot \dfrac{AR_{t+1}}{S_{t+1}}
-}
-\]
-
-6. **DIO**
-
-\[
-\boxed{
-dio_t
-= 365 \cdot \dfrac{INV_{t+1}}{C_{t+1}}
-}
-\]
-
-7. **DPO**
-
-\[
-\boxed{
-dpo_t
-= 365 \cdot \dfrac{AP_{t+1}}{C_{t+1}}
-}
-\]
-
----
-
-8. **Capex / Sales 比 `capex_sales_ratio`**
-
-由 NFA tank 方程：
-
-\[
-PPE_{t+1} = PPE_t + CAPEX_{t+1} - D_{t+1}
-\]
-
-得到：
-
-\[
-CAPEX_{t+1} = PPE_{t+1} - PPE_t + D_{t+1}
-\]
-
-再除以 \(S_{t+1}\)：
-
-\[
-\boxed{
-capex_t
-= \dfrac{PPE_{t+1} - PPE_t + D_{t+1}}{S_{t+1}}
-}
-\]
-
----
-
-### 4.2 需要额外报表行才能反演的 3 个 driver
-
-剩下 3 个 driver：**税率 \(\tau_t\)**、**利率 \(r_t\)**、**分红率 \(pay_t\)**，仅靠 12 维 state 信息不够，需要 Income Statement / CF 中额外行：
-
-- `ni_{t+1}`（Net income）
-- `interest_expense_{t+1}`
-- `tax_provision_{t+1}`
-- `common_stock_dividend_paid_{t+1}`（现金股利）
-
-在 Vélez‑Pareja 模型里，这些本身也是政策/输入，而不是从 BS 反出来的。
-
----
-
-1. **税率 `tax_rate`（\(\tau_t\)）**
-
-从报表算一个实际的 \(EBIT\)、\(EBT\) 和所得税：
-
-\[
-\begin{aligned}
-EBIT^{data}_{t+1} &= S_{t+1} - C_{t+1} - SG_{t+1} - D_{t+1} \\
-INT^{data}_{t+1}  &= \text{interest\_expense}_{t+1} \\
-EBT^{data}_{t+1}  &= EBIT^{data}_{t+1} - INT^{data}_{t+1} \\
-Tax^{data}_{t+1}  &= \text{tax\_provision}_{t+1}
-\end{aligned}
-\]
-
-有效税率 driver：
-
-\[
-\boxed{
-\tau_t
-= \dfrac{Tax^{data}_{t+1}}{\max(EBT^{data}_{t+1},\,\varepsilon)}
-}
-\]
-
-\(\varepsilon\) 是个很小的数（如 \(10^{-6}\)）避免除零。
-
----
-
-2. **利率 `int_rate`（\(r_t\)）**
-
-forward 方程中 \(INT_{t+1} = r_t\,DEBT_t\)，直接反解：
-
-\[
-\boxed{
-r_t
-= \dfrac{INT^{data}_{t+1}}{\max(DEBT_t,\,\varepsilon)}
-}
-\]
-
-其中 `INT^{data}_{t+1}` 就是 IS 里的 `interest_expense_{t+1}`。
-
----
-
-3. **分红率 `payout_ratio`（\(pay_t\)）**
-
-forward：\(DIV_{t+1} = pay_t\cdot\max(NI_{t+1},0)\)。
-
-用 CF 里的 `common_stock_dividend_paid_{t+1}` 反解（原始数据通常为负，表示现金流出）：
-
-\[
-\begin{aligned}
-DIV^{data}_{t+1} &= -\,\text{common\_stock\_dividend\_paid}_{t+1} \\
-NI^{data}_{t+1}  &= \text{ni}_{t+1}
-\end{aligned}
-\]
-
-则：
-
-\[
-\boxed{
-pay_t
-= \dfrac{DIV^{data}_{t+1}}{\max(NI^{data}_{t+1},\,\varepsilon)}
-}
-\]
-
-> 严格地说，如果状态向量 \(y_t\) 只包含那 12 个分量，这 3 个 driver **无法**用 \(y_t, y_{t+1}\) 独立解出来，必须把 `ni`, `interest_expense`, `tax_provision`, `dividend_paid` 等报表行也视作「扩展版 \(y_t\)」的一部分参与反演。
+- 可以对 13 维 driver 序列 \(x_t^\*\) 建模（ARIMA / RNN / Transformer 都行）；  
+- 再把生成的 driver 喂给 forward tank 模型，就能得到一条完整的模拟财报路径，而不会被硬编码债务规则所限制。
 
 ---
 
@@ -821,3 +876,8 @@ x_{t}^{(j)} = a^{(j)} + \phi^{(j)} x_{t-1}^{(j)} + \epsilon_t
    - 固定演化器 \(f\)；
    - 用不同的 driver 来源（perfect / sliding / AR1 / NN）生成 \(\hat{y}_{t+1}\)；
    - 在 state 空间上评估 MSE / MAE，量化各个 driver 模型带来的误差。
+
+
+
+不同的结果保存的时候也是存在result里面 然后用exp_id来标记 每个实验下面的有对应的learner.json 以及实验的log 最终做一个analysis坐标 代表不同方式情况下 还原财报的结果的MSE以及MAE的 Relative L1以及Relative L2的结果
+
