@@ -2,27 +2,10 @@ github Repo for JPM interview
 
 # Q1P1   Vélez–Pareja-Style Financial Forecast (CB → IS → BS) with TensorFlow
 
-This repository implements a **deterministic, no-plug, no-circularity** three-statement forecaster in the spirit of Vélez‑Pareja.
-It uses **Yahoo Finance** (via `yfinance`) to obtain **income statements**, **balance sheets**, and **cash flow statements**,
-and trains **driver networks** in TensorFlow to forecast exogenous drivers. The **accounting layer** is implemented as a
-custom Keras layer that enforces the **cash-budget rules** and **accounting identities** by construction.
+Deterministic, no-plug, no-circularity three-statement forecaster inspired by Vélez‑Pareja.  
+Pipeline: Yahoo Finance → preprocessing to states/drivers → deterministic simulator → driver baselines (perfect / sliding / AR1 / MLP).
 
-> **V2 一句话 / One-liner**：`Train on 1→2 & 2→3, validate on 3→4, test on 4→5; predict growth in AR(1) style using lag + rolling ratios, then enforce Assets≈Liab+Equity with a small relative penalty.`  
-> 把 driver MLP + CashBudgetLayer 看成轻量结构，主监督信号是 growth（level 只是辅助），完全按时间顺序滚动，没有 per-firm z-score 或泄露。
-
-## V2 Highlights
-
-1. **Time splits（时间切）** – 每家公司只有 T=5，也能按 transition 切分：Train 用 1→2、2→3；Valid 用 3→4；Test 用 4→5。实现方式是滑动窗口 + mask，只在有监督的 transition 上计算 loss，历史部分纯当上下文。
-2. **Targets（监督信号）** – 模型输出 `g_t = y_t / (y_{t-1}+ε) - 1`，再映射回 level。训练时 `loss = growth + α·level + λ·relative_identity (+ β·earnings)`，默认 α=0.3，λ∈[1,5]，兼顾增长率和绝对水平。
-3. **Normalization（归一化）** – 不做 per-firm z-score；所有状态、driver flows 先除以训练期的 median sales/assets（size scaling），再做 global z-score（由 train transitions 估计）给 covariates。
-4. **Features（输入）** – `input_t = concat(covs_t, lag y_{t-1}, rolling_mean(y), lag/rolling ratio)`，rolling mean 完全使用过去数据，保持 causality。
-5. **State space（状态）** – 显式纳入 `other_assets`、`other_liab_equity`，保持 Assets≈Liab+Equity。恒等式 penalty 改成相对误差的软约束（clip 0.1，λ 小），不再出现常数大头。
-6. **Sliding windows** – 新的 `mask_{split}` 数组让同一窗口可以服务 train/val/test 不同 transition，既用到 3-4 期历史，又保持时间上“用过去预测未来”。
-
-> ✅ 这样做：干净的时间切 + growth 监督 + lag/rolling 特征，样本虽少但结构自带 prior。  
-> ❌ 不再做 per-company z-score、防止把未来均值/方差泄露到 train 里。
-
-> **Order of computation**: exogenous drivers → **Cash Budget (CB)** (decide ST/LT financing, short-term investment, lock cash target) → **Income Statement (IS)** (interests on beginning balances, taxes) → **Balance Sheet (BS)** (update states and verify `Assets = Liabilities + Equity`).
+**Order of computation**: exogenous drivers → **Cash Budget (CB)** → **Income Statement (IS)** → **Balance Sheet (BS)** while enforcing `Assets = Liabilities + Equity`.
 
 ## 项目结构 / Project Structure
 
@@ -104,11 +87,15 @@ python script/04_driver_pipeline.py --config configs/config.yaml --variant year 
 - `script/04_driver_pipeline.py` – EN/ZH: 基线 driver 预测（perfect/sliding/AR1/MLP），输出 `analysis_*.json` 与预测，用于查看 driver/state 误差。
 - `get_default_config_path` – EN: resolves `$JPM_CONFIG_PATH` or repo default for every CLI. ZH: 自动定位配置文件，方便脚本无参运行。
 
+## Driver 实验摘要（中文）
+- 使用稳定 Top10 公司（AAPL, AMAT, HCA, WMT, LMT, DPZ, SNA, ECL, PNW, AEE）。
+- 年度：only sliding_mean 有效，driver MSE test≈6.9；state MSE test≈1.9e19；AR1/MLP 因样本不足跳过。
+- 季度：sliding_mean driver MSE test≈4.66e2（state≈2.33e19）；AR1 driver MSE test≈5.78e2；MLP driver MSE test≈4.78e3，state 依然较大。per_ticker 指标写在各实验目录 `per_ticker.json`。
+
 ### References 参考文献
 
 - Mejia‑Pelaez, F., & I. Vélez‑Pareja (2011), *Analytical Solution to the Circularity Problem in the Discounted Cash Flow Valuation Framework*, Innovar 21(42):55‑68. 该文提出“现金预算先行”的反推思路。
 - Vélez‑Pareja, I. (2007), *Forecasting Financial Statements with No Plugs and No Circularity* (SSRN 1031735). 指导数据缺失填补与现金、债务的因果次序。
 - Vélez‑Pareja, I. (2009), *Constructing Consistent Financial Planning Models for Valuation* (SSRN 1455304). 说明了如何在估值模型中处理税率、融资与股东回报，本仓库的预处理/正则化策略据此设定。
-
 
 

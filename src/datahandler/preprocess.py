@@ -65,6 +65,13 @@ class SimulationFrames:
 
 
 def _read_statement(path: Path) -> pd.DataFrame:
+    """Load a raw Yahoo statement CSV (index=line items, columns=dates) and coerce numbers.
+
+    Args:
+        path: Absolute/relative path to the CSV file.
+    Returns:
+        DataFrame indexed by line item with datetime columns, numeric values sorted by date.
+    """
     if not path.exists():
         raise FileNotFoundError(path)
     df = pd.read_csv(path, index_col=0)
@@ -73,12 +80,28 @@ def _read_statement(path: Path) -> pd.DataFrame:
 
 
 def _align_frames(*frames: pd.DataFrame) -> Tuple[pd.Index, List[pd.DataFrame]]:
+    """Union-align multiple statement frames on columns.
+
+    Args:
+        frames: Statement DataFrames with date columns.
+    Returns:
+        A common column index and a list of reindexed frames on that union.
+    """
     all_columns = sorted({col for frame in frames for col in frame.columns})
     aligned = [frame.reindex(columns=all_columns) for frame in frames]
     return pd.Index(all_columns), aligned
 
 
 def _first_available(df: pd.DataFrame, candidates: List[str], default: float = 0.0) -> np.ndarray:
+    """Pick the first non-NaN candidate row from a statement.
+
+    Args:
+        df: Statement DataFrame indexed by potential aliases.
+        candidates: Ordered aliases to try.
+        default: Fallback fill value if all candidates are missing/NaN.
+    Returns:
+        1D numpy array of values (one per period), default-filled when missing.
+    """
     for name in candidates:
         if name in df.index:
             values = df.loc[name]
@@ -92,6 +115,14 @@ def _first_available(df: pd.DataFrame, candidates: List[str], default: float = 0
 
 
 def _drop_inactive_prefix(series: Dict[str, np.ndarray], years: pd.Index) -> Tuple[Dict[str, np.ndarray], pd.Index]:
+    """Trim leading periods with zero activity across core items.
+
+    Args:
+        series: Dict of line-item arrays keyed by field name.
+        years: Date index corresponding to the arrays.
+    Returns:
+        (trimmed_series, trimmed_years) with leading zeros removed if any.
+    """
     if not years.size:
         return series, years
     core_keys = ["sales", "cogs", "sga", "dep", "ar", "inventory", "ap", "ppe", "cash", "debt"]
@@ -110,6 +141,15 @@ def _drop_inactive_prefix(series: Dict[str, np.ndarray], years: pd.Index) -> Tup
 
 
 def _prepare_series(is_df: pd.DataFrame, bs_df: pd.DataFrame, cf_df: pd.DataFrame) -> Dict[str, np.ndarray]:
+    """Extract aligned numeric series from IS/BS/CF statements and backfill retained earnings.
+
+    Args:
+        is_df: Income statement frame.
+        bs_df: Balance sheet frame.
+        cf_df: Cash flow frame.
+    Returns:
+        Dict of raw state components (sales, cogs, w/c items, debt/equity, RE, taxes, interest, dividends).
+    """
     sales = _first_available(is_df, IS_CANDIDATES["sales"])
     cogs = _first_available(is_df, IS_CANDIDATES["cogs"])
     sga = _first_available(is_df, IS_CANDIDATES["sga"])
@@ -180,6 +220,14 @@ def _prepare_series(is_df: pd.DataFrame, bs_df: pd.DataFrame, cf_df: pd.DataFram
 
 
 def _build_state_frame(series: Dict[str, np.ndarray], years: pd.Index) -> pd.DataFrame:
+    """Stack selected line-item arrays into a state DataFrame ordered by STATE_ORDER.
+
+    Args:
+        series: Dict of numeric arrays keyed by state fields.
+        years: Date index for columns.
+    Returns:
+        DataFrame (states) indexed by field name, columns=dates.
+    """
     values = np.vstack(
         [
             series["sales"],
@@ -205,6 +253,14 @@ def _build_state_frame(series: Dict[str, np.ndarray], years: pd.Index) -> pd.Dat
 
 
 def _build_driver_frame(states: np.ndarray, years: pd.Index) -> pd.DataFrame:
+    """Derive perfect drivers from consecutive states using inverse_sequence.
+
+    Args:
+        states: State matrix (T x num_states).
+        years: Date index aligned to states.
+    Returns:
+        DataFrame of drivers indexed by date (excluding the first state row).
+    """
     drivers = inverse_sequence(states, eps=EPS)
     if drivers.shape[0] == 0:
         return pd.DataFrame(columns=DRIVER_ORDER)
@@ -213,6 +269,7 @@ def _build_driver_frame(states: np.ndarray, years: pd.Index) -> pd.DataFrame:
 
 
 def _perfect_reconstruction(states: pd.DataFrame, drivers: pd.DataFrame) -> Tuple[float, float]:
+    """Roll the simulator on perfect drivers to gauge reconstruction error."""
     if states.shape[0] < 2 or drivers.empty:
         return float("nan"), float("nan")
     simulator = AccountingSimulator()
@@ -225,6 +282,15 @@ def _perfect_reconstruction(states: pd.DataFrame, drivers: pd.DataFrame) -> Tupl
 
 
 def build_simulation_frames(ticker: str, raw_root: Path, frequency: str) -> SimulationFrames:
+    """Load raw IS/BS/CF CSVs for a ticker and build aligned states/drivers.
+
+    Args:
+        ticker: Ticker symbol.
+        raw_root: Directory containing raw Yahoo CSVs.
+        frequency: 'year' or 'quarter' to pick files.
+    Returns:
+        SimulationFrames with cleaned states, derived drivers, and perfect errors.
+    """
     is_path = raw_root / f"{ticker}_IS_{frequency}.csv"
     bs_path = raw_root / f"{ticker}_BS_{frequency}.csv"
     cf_path = raw_root / f"{ticker}_CF_{frequency}.csv"
@@ -250,6 +316,7 @@ def build_simulation_frames(ticker: str, raw_root: Path, frequency: str) -> Simu
 
 
 def _save_npz(out_dir: Path, frames: SimulationFrames) -> None:
+    """Persist states/drivers for a ticker into a npz bundle."""
     npz_path = out_dir / f"{frames.ticker}_simulation.npz"
     np.savez(
         npz_path,
@@ -260,6 +327,7 @@ def _save_npz(out_dir: Path, frames: SimulationFrames) -> None:
 
 
 def _frequency_to_variant(freq: str, override: Optional[str]) -> str:
+    """Normalize frequency string into variant folder name."""
     if override:
         return override
     mapping = {"annual": "year", "annuals": "year", "year": "year", "quarterly": "quarter", "quarter": "quarter"}
@@ -272,6 +340,7 @@ def run_preprocessing_pipeline(
     override_frequency: Optional[str] = None,
     **_: Sequence[str],
 ) -> str:
+    """End-to-end preprocessing: load raw statements, build states/drivers, save CSV/NPZ and summary."""
     cfg_path = config_path or get_default_config_path()
     cfg = load_config(cfg_path)
     raw_root = Path(cfg.paths.get("raw_dir", "data/raw"))
