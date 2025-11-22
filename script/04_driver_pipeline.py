@@ -8,6 +8,8 @@ import sys
 import uuid
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
+import numpy as np
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -24,6 +26,7 @@ from src.experiments.driver_workflow import (
     build_driver_batch,
     save_experiment,
 )
+from src.model.simulator import AccountingSimulator
 from src.utils.io import get_default_config_path, load_config
 from src.utils.logging import get_logger
 
@@ -70,25 +73,106 @@ def _eval_and_save(
     test_targets,
     frames,
     log_lines: Sequence[str],
+    include_val: bool,
 ) -> Dict[str, object]:
-    driver_val = evaluate_driver_predictions(preds_val, val_targets)
+    driver_val = evaluate_driver_predictions(preds_val, val_targets) if include_val else {}
     driver_test = evaluate_driver_predictions(preds_test, test_targets)
-    state_val = evaluate_state_predictions(preds_val, frames)
+    state_val = evaluate_state_predictions(preds_val, frames) if include_val else {}
     state_test = evaluate_state_predictions(preds_test, frames)
     exp_dir = out_root / exp_id
+
+    def per_ticker_driver(preds, targets):
+        rows = []
+        for tk, bucket in preds.items():
+            tgt_bucket = targets.get(tk, {})
+            errs = []
+            rel1 = []
+            rel2 = []
+            for idx, pred in bucket.items():
+                tgt = tgt_bucket.get(idx)
+                if tgt is None:
+                    continue
+                diff = pred - tgt
+                errs.append(diff ** 2)
+                denom = np.abs(tgt) + 1e-8
+                rel1.append(np.abs(diff) / denom)
+                rel2.append((diff ** 2) / (denom ** 2))
+            if not errs:
+                continue
+            mat = np.vstack(errs)
+            mae_arr = np.sqrt(mat)
+            rows.append(
+                {
+                    "ticker": tk,
+                    "mse": float(mat.mean()),
+                    "mae": float(mae_arr.mean()),
+                    "rel_l1": float(np.vstack(rel1).mean()) if rel1 else float("nan"),
+                    "rel_l2": float(np.vstack(rel2).mean()) if rel2 else float("nan"),
+                    "n": len(errs),
+                }
+            )
+        return rows
+
+    def per_ticker_state(preds):
+        rows = []
+        for frame in frames:
+            bucket = preds.get(frame.ticker)
+            if not bucket:
+                continue
+            errs = []
+            rel1 = []
+            rel2 = []
+            for idx, driver_pred in bucket.items():
+                if idx + 1 >= frame.states.shape[0]:
+                    continue
+                prev_state = frame.states[idx]
+                true_state = frame.states[idx + 1]
+                next_state = AccountingSimulator()._step(prev_state, driver_pred)
+                diff = next_state - true_state
+                errs.append(diff ** 2)
+                denom = np.abs(true_state) + 1e-8
+                rel1.append(np.abs(diff) / denom)
+                rel2.append((diff ** 2) / (denom ** 2))
+            if not errs:
+                continue
+            mat = np.vstack(errs)
+            mae_arr = np.sqrt(mat)
+            rows.append(
+                {
+                    "ticker": frame.ticker,
+                    "mse": float(mat.mean()),
+                    "mae": float(mae_arr.mean()),
+                    "rel_l1": float(np.vstack(rel1).mean()) if rel1 else float("nan"),
+                    "rel_l2": float(np.vstack(rel2).mean()) if rel2 else float("nan"),
+                    "n": len(errs),
+                }
+            )
+        return rows
+
     payload = {
         "exp_id": exp_id,
         "method": method,
         "params": dict(params),
         "dataset": dict(dataset_info),
-        "driver_metrics": {"val": driver_val, "test": driver_test},
-        "state_metrics": {"val": state_val, "test": state_test},
+        "driver_metrics": {"val": driver_val, "test": driver_test} if include_val else {"test": driver_test},
+        "state_metrics": {"val": state_val, "test": state_test} if include_val else {"test": state_test},
         "predictions": {
             "val": _count_predictions(preds_val),
             "test": _count_predictions(preds_test),
         },
     }
     save_experiment(exp_dir, payload, log_lines)
+    per_ticker_payload = {
+        "driver": {
+            "val": per_ticker_driver(preds_val, val_targets) if include_val else [],
+            "test": per_ticker_driver(preds_test, test_targets),
+        },
+        "state": {
+            "val": per_ticker_state(preds_val) if include_val else [],
+            "test": per_ticker_state(preds_test),
+        },
+    }
+    (exp_dir / "per_ticker.json").write_text(json.dumps(per_ticker_payload, indent=2))
     LOGGER.info(
         "%s → driver MSE test=%.4e, state MSE test=%.4e | state MAE %.4e relL1 %.4e",
         method,
@@ -157,6 +241,7 @@ def run_pipeline(
             test_targets=test_targets,
             frames=frames,
             log_lines=["Perfect driver baseline (no training)."],
+            include_val=False,
         )
     )
 
@@ -176,6 +261,7 @@ def run_pipeline(
             test_targets=test_targets,
             frames=frames,
             log_lines=[f"Sliding mean per ticker with window={window}."],
+            include_val=False,
         )
     )
 
@@ -200,6 +286,7 @@ def run_pipeline(
                     "Pooled AR(1) per driver dimension.",
                     f"Train samples: {train_batch.X.shape[0]}",
                 ],
+                include_val=False,
             )
         )
     else:
@@ -227,6 +314,7 @@ def run_pipeline(
                     f"Train samples: {train_batch.X.shape[0]}",
                     f"Validation samples: {val_batch.X.shape[0]}",
                 ],
+                include_val=True,
             )
         )
     else:

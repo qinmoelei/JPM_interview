@@ -56,14 +56,14 @@ script/
   00_download.py            # EN/ZH: 下载原始报表
   01_preprocess.py          # EN: build simulation-ready states/drivers | ZH: 生成仿真输入
   02_train.py               # EN/ZH: 仿真入口（deterministic simulator）
-  03_eval.py                # EN/ZH: 回测入口（示例）
-  run_baselines.py          # EN: quick scenario sims | ZH: 简易情景仿真
+  03_eval.py                # EN/ZH: 回测入口（示例，可按需调整）
+  04_driver_pipeline.py     # EN/ZH: driver 回归/基线 (perfect/sliding/AR1/MLP)
 ```
 
 - `configs/` 集中管理下载/预处理/仿真参数（含频率、路径设置）。
 - `src/datahandler/` 现在专注于把 Yahoo IS/BS/CF 对齐、抽取稳健的 line item、计算 driver 比率，直接生成仿真输入。
 - `src/model/` 提供 deterministic accounting simulator，可逐期滚动现金预算而无需神经网络。
-- `script/` 下的 `00/01/02` 是 CLI workflow，`run_baselines.py` 用于快速尝试简单情景扰动。
+- `script/` 下的 `00/01/02` 是下载→预处理→仿真的 CLI workflow，`04_driver_pipeline.py` 用于 driver 拟合/基线评估（perfect/sliding/AR1/MLP）。
 - `tests/` 提供轻量合成测试保证恒等式、下载器、特征计算等模块最小正确性。
 
 ## 工作流 / Workflow
@@ -74,8 +74,8 @@ script/
    - 载入每个 ticker 的初始状态 + driver 序列
    - 使用 deterministic accounting simulator 逐期推演
    - 将 MAE / 资产负债平衡误差写入 `results/simulation_<timestamp>/simulation_metrics.json`
-4. **Scenario（情景）** – `python script/run_baselines.py --config configs/config.yaml --variant simulation --tickers AAPL MSFT --growth-delta 0.02` 可对 driver 做简单扰动（如增长上调 2pp）并快速查看仿真变化。
-5. **Evaluate（评估）** – `python script/03_eval.py --config configs/config.yaml` 仍可作为自定义回测入口。
+4. **Driver 拟合/基线** – `python script/04_driver_pipeline.py --config configs/config.yaml --variant year --results-subdir driver_experiments_year`（或 `--variant quarter`），提供 perfect/sliding/AR1/MLP 多种 driver 预测基线，并写出 `analysis_*.json` 与预测。
+5. **Evaluate（评估，可选）** – `python script/03_eval.py --config configs/config.yaml` 可作为自定义回测入口。
 
 > **环境提示**：推荐使用 `conda run -n jpmc <command>` 与本地测试一致。
 
@@ -89,7 +89,8 @@ pip install -U -r requirements.txt
 python script/00_download.py --config configs/config.yaml
 python script/01_preprocess.py --config configs/config.yaml
 python script/02_train.py --config configs/config.yaml
-python script/run_baselines.py --config configs/config.yaml --tickers AAPL
+# 示例 driver 基线（year 数据）
+python script/04_driver_pipeline.py --config configs/config.yaml --variant year --results-subdir driver_experiments_year
 ```
 
 ## References
@@ -100,7 +101,7 @@ python script/run_baselines.py --config configs/config.yaml --tickers AAPL
 - `preprocess.build_simulation_frames` – EN: loads raw IS/BS/CF, picks robust line items, derives Vélez-Pareja style states + driver ratios without heavy scaling. ZH: 读取三张表，按候选名称聚合出核心状态与 driver，比对年份自动对齐，生成仿真输入。
 - `data/processed/<variant>/*_simulation.npz` – stores `states`（T×12）与 `drivers`（(T-1)×11），便于直接喂入 simulator，并包含 `simulation_summary.json` 方便巡查可用窗口。
 - `model.simulator.AccountingSimulator` – EN: deterministic layer that enforces working-capital + financing logic; perfect to stress-test scenarios before ML. ZH: 仿真引擎内置现金预算逻辑，确保 `Assets = Liabilities + Equity`，可先跑情景再考虑机器学习。
-- `script/run_baselines.py` – EN: light CLI to perturb drivers (e.g., +200 bps growth) and observe path deltas. ZH: 轻量 CLI 支持对 driver 做简单情景冲击，快速查看现金/负债演化。
+- `script/04_driver_pipeline.py` – EN/ZH: 基线 driver 预测（perfect/sliding/AR1/MLP），输出 `analysis_*.json` 与预测，用于查看 driver/state 误差。
 - `get_default_config_path` – EN: resolves `$JPM_CONFIG_PATH` or repo default for every CLI. ZH: 自动定位配置文件，方便脚本无参运行。
 
 ### References 参考文献
@@ -108,8 +109,6 @@ python script/run_baselines.py --config configs/config.yaml --tickers AAPL
 - Mejia‑Pelaez, F., & I. Vélez‑Pareja (2011), *Analytical Solution to the Circularity Problem in the Discounted Cash Flow Valuation Framework*, Innovar 21(42):55‑68. 该文提出“现金预算先行”的反推思路。
 - Vélez‑Pareja, I. (2007), *Forecasting Financial Statements with No Plugs and No Circularity* (SSRN 1031735). 指导数据缺失填补与现金、债务的因果次序。
 - Vélez‑Pareja, I. (2009), *Constructing Consistent Financial Planning Models for Valuation* (SSRN 1455304). 说明了如何在估值模型中处理税率、融资与股东回报，本仓库的预处理/正则化策略据此设定。
-
-
 
 
 
