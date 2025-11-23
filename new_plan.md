@@ -881,3 +881,28 @@ x_{t}^{(j)} = a^{(j)} + \phi^{(j)} x_{t-1}^{(j)} + \epsilon_t
 
 不同的结果保存的时候也是存在result里面 然后用exp_id来标记 每个实验下面的有对应的learner.json 以及实验的log 最终做一个analysis坐标 代表不同方式情况下 还原财报的结果的MSE以及MAE的 Relative L1以及Relative L2的结果
 
+
+
+
+
+
+图像的含义 这四张图share 同样的横坐标与纵坐标  他的区别是描述的对象不同
+先解释每张图共性的部分
+每张图都是bar plot  他的横坐标是不同公司的ticker   一个ticker上有四个颜色的bar bar的高度由纵坐标含义所指示（后面解释） 然后不同的颜色的bar代表着不同的不同的方法的结果
+纵坐标代表着reconstruct的mse （这个mse是被标准结果的结果  肯定都是待遇0） 然后再取log （为了纵坐标的区分度稍微高一些） 然后clip （为了避免图像被一个值dominant 绝对值）
+
+注意到state和driver标准化的尺度不一样 因此直接比较二者的具体数值没啥具体意义
+
+
+四张图不同的地方
+
+看标题  由两个地方不同 1） 频率 quarter 或者year 2） 对象 state或者driver
+频率代表这我们建模的财报的频率  然后对象代表这我们建模的是因（driver） 还是果（state）
+
+
+
+我们大概的方法论是用一些模型来regress driver 然后通过演化方程自动得到对应的state   所以我们分别统计driver的表现 和state表现
+
+
+
+根据这几张图 看看有没有一些insight可以分析
