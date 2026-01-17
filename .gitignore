@@ -13,3 +13,11 @@ data/*
 results/
 results/*
 outlook
+.env
+
+
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
