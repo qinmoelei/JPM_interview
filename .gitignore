@@ -21,3 +21,4 @@ venv/
 dist/
 build/
 *.egg-info/
+plan_prompts/
