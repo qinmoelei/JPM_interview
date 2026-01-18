@@ -1,0 +1,86 @@
+\documentclass[11pt]{article}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\title{Part 2 Report: LLM Financial Statement Analysis}
+\author{}
+\date{}
+\begin{document}
+\maketitle
+
+\section*{(a) LLM Choice}
+We use \texttt{gpt-4.1-mini} (APIYi OpenAI-compatible) for structured JSON extraction and low-temperature stability.
+\textbf{Conclusion:} The model is a practical balance of robustness and cost for both driver forecasting and PDF extraction.
+
+\section*{(b) Balance Sheet Forecast: All A2D Models}
+A2D includes baselines, LLM, and driver-level ensembles. Tables below report state\_test metrics.
+
+\subsection*{Annual (year) A2D}
+\begin{center}
+\resizebox{\textwidth}{!}{\input{results/part2_summary/a2d_state_year.tex}}
+\end{center}
+
+\subsection*{Quarterly A2D}
+\begin{center}
+\resizebox{\textwidth}{!}{\input{results/part2_summary/a2d_state_quarter.tex}}
+\end{center}
+
+Best model (excluding the perfect oracle):
+- Year: best MSE/MAE = ensemble ar1; best rel\_l1/rel\_l2 = baseline sliding\_mean.
+- Quarter: best MSE/MAE = ensemble ar1; best rel\_l1/rel\_l2 = ensemble sliding\_mean.
+
+\textbf{Conclusion:} LLM alone is not the top performer; ensembles improve MSE/MAE, while sliding\_mean (or its ensemble) retains better relative errors.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.95\textwidth]{results/part2_summary/a2d_state_mse_year.png}
+\caption{A2D state\_test MSE (annual, log scale)}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.95\textwidth]{results/part2_summary/a2d_state_mse_quarter.png}
+\caption{A2D state\_test MSE (quarterly, log scale)}
+\end{figure}
+
+\section*{(c) Ensemble Feasibility}
+Driver-level blending with validation grid search improves MSE/MAE for ar1 baselines but does not uniformly improve relative errors.
+\textbf{Conclusion:} Ensembling can help, but metric choice matters.
+
+\section*{(d) CFO/CEO Recommendation (AAPL)}
+Key message: sales decline with higher capex and rising leverage; focus on liquidity and capital discipline. Suggested actions: tighten receivables (DSO), optimize inventory (DIO), prioritize capex (capex-to-depreciation, ROIC), manage leverage, and control SG\&A.
+\textbf{Conclusion:} Liquidity management and capex discipline are the most direct levers.
+
+\section*{(e) GM Annual Report Pages}
+The pipeline auto-detected the income statement on PDF page 61 and balance sheet on PDF page 62 (printed page numbers differ).
+\textbf{Conclusion:} Auto page detection works on the GM report.
+
+\section*{(f) GM PDF Extraction (All Models, mean +/- std)}
+\begingroup
+\scriptsize
+\begin{center}
+\resizebox{\textwidth}{!}{\input{results/part2_summary/e2i_GM_2023_ratios_compact.tex}}
+\end{center}
+\endgroup
+\textbf{Conclusion:} Most models are stable across runs; leverage ratios vary for some models, indicating extraction sensitivity.
+
+\section*{(g) Robustness and Versions}
+E2I runs use 5 repeats per model (temperature 0.2); A2D uses temp=0 and has no stored robustness repeats.
+Tool versions: pdfplumber 0.11.9, openai SDK 2.15.0, APIYi base\_url https://api.apiyi.com/v1.
+\textbf{Conclusion:} Key extracted values are robust; EBITDA-based ratios remain sensitive to missing D\&A.
+
+\section*{(h) LVMH Annual Report (All Models, mean +/- std)}
+\begingroup
+\scriptsize
+\begin{center}
+\resizebox{\textwidth}{!}{\input{results/part2_summary/e2i_LVMH_2024_ratios_compact.tex}}
+\end{center}
+\endgroup
+\textbf{Conclusion:} The method generalizes to a large IFRS report; most models agree on net income and liquidity while cost-to-income/coverage vary for some models.
+
+\section*{(i) Extension to Other Companies}
+Feasible for Tencent, Alibaba, JPM, Exxon, Volkswagen, Microsoft, and Google with the same pipeline, but likely needs manual page hints, multilingual headers, and bank-specific ratio definitions.
+\textbf{Conclusion:} Portability is high, but production use needs per-company tuning.
+
+\end{document}

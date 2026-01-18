@@ -84,3 +84,124 @@ python script/04_driver_pipeline.py --config configs/config.yaml --variant year 
 - `results/simulation_<timestamp>/simulation_metrics.json`: deterministic simulation MAE/identity metrics per ticker.
 - `results/driver_experiments_<variant>_<tag>/analysis_*.json`: summary of driver/state metrics for each method (perfect, sliding, AR1, MLP).
 - `results/driver_experiments_<variant>_<tag>/<method>_<timestamp>_*/`: per-method run directory containing `learner.json` (metrics/config) and `per_ticker.json` (per-ticker driver/state errors).
+
+
+
+
+├── README.md
+├── configs
+│   ├── config.yaml
+│   ├── config_stable.yaml
+│   ├── config_stable_top.yaml
+│   └── prompt
+│       ├── cfo_recommendation.yaml
+│       ├── driver_forecast.yaml
+│       ├── pdf_extract.yaml
+│       ├── risk_score.yaml
+│       └── statement_extract.yaml
+├── conftest.py
+├── function.md
+├── outlook
+│   ├── 0_pakage_related
+│   │   └── 1_package.ipynb
+│   ├── 1_data_related
+│   │   ├── 1_see_org_data.ipynb
+│   │   ├── 2_see_state_perfect_driver_scales_executed.ipynb
+│   │   ├── 3_check_driver_result.ipynb
+│   │   ├── 3_see__driver_statics.ipynb
+│   │   ├── 4_good_companies.ipynb
+│   │   ├── 5_all_result.ipynb
+│   │   ├── company_driver_stability.csv
+│   │   ├── driver_per_ticker_stats.csv
+│   │   ├── driver_scale_stats.csv
+│   │   ├── driver_spread_per_ticker.csv
+│   │   ├── perfect_drivers_long.csv
+│   │   ├── perfect_drivers_long_norm_by_first.csv
+│   │   ├── perfect_states_long.csv
+│   │   ├── stable_companies_drivers.csv
+│   │   ├── state_per_ticker_stats.csv
+│   │   ├── state_scale_stats.csv
+│   │   └── state_spread_per_ticker.csv
+│   └── 2_result_visiualizaiton
+│       ├── 1_visual_peritick_result.ipynb
+│       ├── Quarter_Driver.pdf
+│       ├── Quarter_State.pdf
+│       ├── Year_Driver.pdf
+│       ├── Year_State.pdf
+│       └── plot
+│           ├── Quarter___Driver.pdf
+│           ├── Quarter___State.pdf
+│           ├── Year___Driver.pdf
+│           └── Year___State.pdf
+├── plan_prompts
+│   ├── EXPERIMENT_PLAN.pdf
+│   ├── bonus.md
+│   ├── new_plan.md
+│   ├── new_plan_4_model.md
+│   ├── part2_report.md
+│   ├── part2_后续计划.md
+│   └── report_partB.md
+├── questions
+│   └── Intern interview 2026 question 1 ver 2.docx
+├── reports
+│   ├── JPMC_DataProject.pdf
+│   ├── part2.tex
+│   └── report.tex
+├── requirements.txt
+├── script
+│   ├── 00_download.py
+│   ├── 01_preprocess.py
+│   ├── 02_train.py
+│   ├── 03_eval.py
+│   ├── 04_driver_pipeline.py
+│   ├── 05_llm_driver_pipeline.py
+│   ├── 06_pdf_statement_pipeline.py
+│   ├── 07_part2_summary.py
+│   └── __init__.py
+├── src
+│   ├── __init__.py
+│   ├── datahandler
+│   │   ├── __init__.py
+│   │   ├── data_download.py
+│   │   ├── data_sanity_check.py
+│   │   ├── dataset.py
+│   │   ├── features.py
+│   │   └── preprocess.py
+│   ├── experiments
+│   │   ├── __init__.py
+│   │   └── driver_workflow.py
+│   ├── llm
+│   │   ├── __init__.py
+│   │   ├── apiyi.py
+│   │   ├── credit_rating.py
+│   │   ├── driver_forecast.py
+│   │   ├── driver_pipeline.py
+│   │   ├── ensemble.py
+│   │   ├── json_utils.py
+│   │   ├── loan_pricing.py
+│   │   ├── pdf_extract.py
+│   │   ├── pdf_statement_pipeline.py
+│   │   ├── prompt_config.py
+│   │   ├── prompt_logger.py
+│   │   ├── ratios.py
+│   │   ├── reasoning_logger.py
+│   │   ├── recommendations.py
+│   │   ├── risk_warnings.py
+│   │   ├── robustness.py
+│   │   └── shenanigans.py
+│   ├── model
+│   │   ├── __init__.py
+│   │   ├── dynamics_tf.py
+│   │   └── simulator.py
+│   └── utils
+│       ├── __init__.py
+│       ├── io.py
+│       └── logging.py
+└── tests
+    ├── test_02_data_checks.py
+    ├── test_03_data_download.py
+    ├── test_04_dataset.py
+    ├── test_05_features.py
+    ├── test_06_driver_metrics.py
+    ├── test_07_llm_apiyi.py
+    └── test_08_llm_utils.py
