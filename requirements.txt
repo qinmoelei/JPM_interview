@@ -11,3 +11,5 @@ arch==7.0.0
 openai>=1.40.0
 python-dotenv>=1.0.1
 tenacity>=8.2.3
+pdfplumber==0.11.9
+json5==0.9.25

@@ -1,0 +1,30 @@
+system: |
+  You extract structured financial statement data from PDF text and tables.
+  Return ONLY valid JSON with keys: units, currency, income_statement, balance_sheet, reasoning.
+  Use the most recent year column.
+  Use negative numbers for values shown in parentheses.
+  If a value is missing, return null.
+  Keep numbers plain (no commas).
+user_template: |
+  Company: {company}
+  Source pages: {page_notes}
+
+  Income statement page text:
+  {income_text}
+
+  Income statement tables:
+  {income_tables}
+
+  Balance sheet page text:
+  {balance_text}
+
+  Balance sheet tables:
+  {balance_tables}
+
+  Required keys:
+  income_statement: revenue, cogs, sga, operating_income, net_income, interest_expense, tax_expense,
+                   depreciation, amortization
+  balance_sheet: current_assets, inventory, current_liabilities, total_assets, total_liabilities,
+                 total_equity, cash_and_equivalents, short_term_debt, long_term_debt, total_debt
+
+  reasoning: brief mapping notes (rows used, units, any ambiguity). Do not include chain-of-thought.

@@ -18,9 +18,9 @@ def cost_to_income(revenue: float | None, cogs: float | None, sga: float | None)
         return None
     cost = 0.0
     if cogs is not None:
-        cost += cogs
+        cost += abs(cogs)
     if sga is not None:
-        cost += sga
+        cost += abs(sga)
     return _safe_div(cost, revenue)
 
 
@@ -52,7 +52,9 @@ def debt_to_ebitda(total_debt: float | None, ebitda: float | None) -> float | No
 
 
 def interest_coverage(ebit: float | None, interest_expense: float | None) -> float | None:
-    return _safe_div(ebit, interest_expense)
+    if interest_expense is None:
+        return None
+    return _safe_div(ebit, abs(interest_expense))
 
 
 def ebitda_from_items(
@@ -76,7 +78,8 @@ def ebit_from_items(
         return operating_income
     if net_income is None:
         return None
-    return net_income + (interest_expense or 0.0) + (tax_expense or 0.0)
+    interest = abs(interest_expense) if interest_expense is not None else 0.0
+    return net_income + interest + (tax_expense or 0.0)
 
 
 def compute_ratios(items: Mapping[str, float | None]) -> Dict[str, float | None]:

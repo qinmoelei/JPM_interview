@@ -54,6 +54,8 @@ script/
 3. Simulate (deterministic) – `PYTHONPATH=. python script/02_train.py --config configs/config.yaml --variant <year|quarter> [--max-tickers N]` to roll the simulator and write `results/simulation_<timestamp>/simulation_metrics.json`.
 4. Driver baselines – `python script/04_driver_pipeline.py --config configs/config.yaml --variant <year|quarter> --results-subdir driver_experiments_<...>` to run perfect/sliding/AR1/MLP driver forecasts; outputs `analysis_*.json` and per-ticker metrics.
 5. Evaluate (optional) – `python script/03_eval.py --config configs/config.yaml` for custom backtests.
+6. 
+7. conda run -n jpmc python script/06_pdf_statement_pipeline.py --out-dir results/part2_llm_run_e2i
 
 Tip: set `PYTHONPATH=.` when running scripts directly.
 

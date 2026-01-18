@@ -21,6 +21,7 @@
 - prompt/pdf_extract.yaml: PDF 抽取 prompt。
 - prompt/cfo_recommendation.yaml: CFO 建议 prompt。
 - prompt/risk_score.yaml: 风险段落打分 prompt。
+- prompt/statement_extract.yaml: 报表表格抽取 prompt。
 
 ## src/
 - __init__.py: Python 包标记。
@@ -57,6 +58,7 @@
 - recommendations.py: CFO/CEO 建议生成。
 - ratios.py: 财务比率公式计算。
 - pdf_extract.py: PDF 抽取 + LLM 结构化解析。
+- pdf_statement_pipeline.py: pdfplumber 抽取 + LLM 表格解析 + 稳健性评估。
 - credit_rating.py: 评级数据集构建、模型训练与 Evergrande 打分。
 - shenanigans.py: 规则式“财务舞弊/红旗”检测（基于 raw 数据）。
 - risk_warnings.py: 审计意见抽取与风险段落排序。
@@ -74,6 +76,7 @@
 - 03_eval.py: 额外评估入口（CLI）。
 - 04_driver_pipeline.py: driver baseline 实验（CLI）。
 - 05_llm_driver_pipeline.py: LLM driver 预测 + ensemble + robustness + CFO 建议（CLI）。
+- 06_pdf_statement_pipeline.py: PDF 报表抽取 + 多模型稳健性评估（CLI）。
 
 ## tests/
 - test_02_data_checks.py: 报表字段/恒等式检查。
@@ -90,12 +93,17 @@
 - processed/year/*_states.csv: 年度 states (T x 15)。
 - processed/year/*_drivers.csv: 年度 drivers (T-1 x 13)。
 - processed/year/*_simulation.npz: simulator roll-out 结果。
+- pdf/gm_2023_ar.pdf: GM 年报 PDF。
+- pdf/lvmh_2024.pdf: LVMH 年报 PDF。
 
 ## results/
 - driver_experiments_year_top/: Part1 driver baseline 输出。
 - driver_experiments_quarter_top/: Part1 季度 baseline 输出。
 - driver_experiments_*/**/preds_val.json: Part1 逐 ticker 预测（val，用于 ensemble）。
 - driver_experiments_*/**/preds_test.json: Part1 逐 ticker 预测（test，用于 ensemble）。
+- part2_llm_run_a2d_quarter_top/: Part2(a–d) LLM 实验（季度）。
+- part2_llm_run_a2d_year_top/: Part2(a–d) LLM 实验（年度）。
+- part2_llm_run_e2i/: Part2(e–i) PDF 报表抽取 + 多模型稳健性输出。
 
 ## reports/
 - report.tex: Part1 报告 LaTeX 源码。
