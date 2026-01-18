@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Risk-warning extraction from annual reports (rule + ranking)."""
+
 import json
 import re
 from dataclasses import dataclass
@@ -12,8 +14,11 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 from src.llm.apiyi import extract_chat_content, request_chat_completion
+from src.llm.prompt_config import get_prompt_section, render_prompt
+from src.llm.prompt_logger import append_prompt_log
 
 
+# Regex rules for audit opinion classification.
 OPINION_PATTERNS = {
     "qualified": re.compile(r"qualified opinion", re.I),
     "adverse": re.compile(r"adverse opinion", re.I),
@@ -50,6 +55,7 @@ def _read_pdf_text(pdf_path: Path) -> str:
 
 
 def extract_audit_opinion(text: str) -> Dict[str, object]:
+    # Rule-based audit opinion detection.
     flags = {name: bool(pattern.search(text)) for name, pattern in OPINION_PATTERNS.items()}
     if flags["adverse"]:
         opinion = "adverse"
@@ -68,6 +74,7 @@ def split_paragraphs(text: str, min_len: int = 80) -> List[str]:
 
 
 def rank_risk_paragraphs(text: str, top_k: int = 20) -> List[Dict[str, object]]:
+    # Rank paragraphs by TF-IDF similarity to a risk keyword query.
     paragraphs = split_paragraphs(text)
     if not paragraphs:
         return []
@@ -79,19 +86,24 @@ def rank_risk_paragraphs(text: str, top_k: int = 20) -> List[Dict[str, object]]:
     return [{"rank": i + 1, "score": float(score), "paragraph": paragraphs[idx]} for i, (idx, score) in enumerate(ranked)]
 
 
-async def llm_score_paragraphs(paragraphs: Sequence[str], model: Optional[str] = None) -> List[Dict[str, object]]:
-    prompt = (
-        "Score each paragraph for risk relevance on a 0-5 scale. "
-        "Return JSON array of objects with fields: score, rationale."
-    )
-    content = prompt + "\n\n" + json.dumps(paragraphs, indent=2)
+async def llm_score_paragraphs(
+    paragraphs: Sequence[str],
+    model: Optional[str] = None,
+    *,
+    prompt_log_path: Optional[Path] = None,
+) -> List[Dict[str, object]]:
+    section = get_prompt_section("risk_score")
+    paragraphs_json = json.dumps(paragraphs, indent=2)
+    messages = render_prompt(section, paragraphs_json=paragraphs_json)
     response = await request_chat_completion(
-        [{"role": "system", "content": "You are a risk analyst."}, {"role": "user", "content": content}],
+        messages,
         model=model,
         temperature=0.0,
         max_tokens=900,
     )
     raw = extract_chat_content(response)
+    if prompt_log_path is not None:
+        append_prompt_log(prompt_log_path, title="risk_score", messages=messages, response=raw)
     return json.loads(raw)
 
 

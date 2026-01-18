@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+"""Generate CFO/CEO action recommendations from forecast deltas."""
+
 import json
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, Mapping, Sequence
 
 import numpy as np
 
 from src.llm.apiyi import extract_chat_content, request_chat_completion
+from src.llm.prompt_config import get_prompt_section, render_prompt
+from src.llm.prompt_logger import append_prompt_log
 from src.model.dynamics_tf import DRIVER_ORDER, STATE_ORDER
 
 
@@ -38,24 +43,16 @@ def build_cfo_prompt(
 ) -> Sequence[Mapping[str, str]]:
     summary = _state_summary(prev_state, next_state)
     drivers = _driver_changes(last_driver, pred_driver)
-    content = (
-        f"Company: {ticker}\n"
-        "Balance sheet forecast summary (next period vs previous):\n"
-        f"{json.dumps(summary, indent=2)}\n"
-        "Largest driver changes (delta):\n"
-        f"{json.dumps(drivers, indent=2)}\n\n"
-        "Provide CFO recommendations. Requirements:\n"
-        "- Start with 1-2 sentence core conclusion.\n"
-        "- List at least 3 actions, each formatted as: Action -> Impact path -> Monitor metric.\n"
-        "- Use concrete operational levers (working capital, capex, financing, pricing, etc.).\n"
+    # Provide both state deltas and driver shifts to ground recommendations.
+    section = get_prompt_section("cfo_recommendation")
+    state_json = json.dumps(summary, indent=2)
+    driver_json = json.dumps(drivers, indent=2)
+    return render_prompt(
+        section,
+        ticker=ticker,
+        state_json=state_json,
+        driver_json=driver_json,
     )
-    return [
-        {
-            "role": "system",
-            "content": "You are a seasoned CFO advisor. Be concise and action-oriented.",
-        },
-        {"role": "user", "content": content},
-    ]
 
 
 async def generate_cfo_recommendation(
@@ -67,6 +64,7 @@ async def generate_cfo_recommendation(
     *,
     model: str | None = None,
     temperature: float = 0.2,
+    prompt_log_path: Path | None = None,
 ) -> Dict[str, str]:
     messages = build_cfo_prompt(ticker, prev_state, next_state, last_driver, pred_driver)
     response = await request_chat_completion(
@@ -75,8 +73,11 @@ async def generate_cfo_recommendation(
         temperature=temperature,
         max_tokens=700,
     )
+    content = extract_chat_content(response)
+    if prompt_log_path is not None:
+        append_prompt_log(prompt_log_path, title=f"cfo_recommendation:{ticker}", messages=messages, response=content)
     return {
         "ticker": ticker,
         "timestamp": datetime.utcnow().isoformat() + "Z",
-        "content": extract_chat_content(response),
+        "content": content,
     }

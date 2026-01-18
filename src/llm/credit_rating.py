@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Credit rating modeling and Evergrande case scoring."""
+
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +20,7 @@ from src.utils.logging import get_logger
 LOGGER = get_logger(__name__)
 
 
+# Rating bins are coarse and derived from Altman-style scores.
 RATING_BUCKETS = [
     ("AAA", 3.0),
     ("AA", 2.6),
@@ -37,6 +40,7 @@ def _rating_from_score(score: float) -> str:
 
 
 def _compute_features(states: pd.DataFrame) -> pd.DataFrame:
+    # Feature engineering aligns with common credit risk ratios.
     sales = states["sales"]
     cogs = states["cogs"]
     sga = states["sga"]
@@ -65,6 +69,7 @@ def _compute_features(states: pd.DataFrame) -> pd.DataFrame:
 
 
 def _z_score(features: pd.DataFrame) -> pd.Series:
+    # Simplified Altman-like score used to pseudo-label ratings.
     return (
         1.2 * features["wc_to_assets"]
         + 3.3 * features["ebit_to_assets"]
@@ -74,6 +79,7 @@ def _z_score(features: pd.DataFrame) -> pd.Series:
 
 
 def build_rating_dataset(proc_dir: Path, tickers: Sequence[str]) -> pd.DataFrame:
+    # Convert processed states into a pseudo-labeled rating dataset.
     rows = []
     for tk in tickers:
         path = proc_dir / f"{tk}_states.csv"
@@ -104,6 +110,7 @@ def train_rating_models(dataset: pd.DataFrame) -> Dict[str, object]:
     X = dataset[feature_cols].to_numpy(dtype=float)
     y = dataset["rating_label"].astype(str)
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=2024, stratify=y)
+    # Multiclass model for rating labels.
     clf = LogisticRegression(max_iter=500, multi_class="multinomial")
     clf.fit(X_train, y_train)
     preds = clf.predict(X_test)
@@ -113,6 +120,7 @@ def train_rating_models(dataset: pd.DataFrame) -> Dict[str, object]:
     rating_to_num = {label: i for i, (label, _) in enumerate(RATING_BUCKETS)}
     y_num = dataset["rating_label"].map(rating_to_num).to_numpy(dtype=float)
     X_train2, X_test2, y_train2, y_test2 = train_test_split(X, y_num, test_size=0.25, random_state=2024)
+    # Ordinal-style regression on ordered buckets.
     reg = LinearRegression()
     reg.fit(X_train2, y_train2)
     pred_num = reg.predict(X_test2)

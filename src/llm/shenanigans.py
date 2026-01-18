@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+"""Rule-based financial shenanigans detection from raw statements."""
+
+from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
 import numpy as np
@@ -22,6 +25,7 @@ def _safe_series(df: pd.DataFrame, key: str) -> pd.Series:
 
 
 def _load_statement(raw_dir: Path, ticker: str, statement: str) -> Optional[pd.DataFrame]:
+    # Load raw Yahoo statements and standardize line items.
     path = raw_dir / f"{ticker}_{statement}_annual.csv"
     if not path.exists():
         return None
@@ -31,6 +35,7 @@ def _load_statement(raw_dir: Path, ticker: str, statement: str) -> Optional[pd.D
 
 
 def compute_red_flags(ticker: str, raw_dir: Path) -> Optional[Dict[str, object]]:
+    # Heuristic checks: AR/Sales spike, Inventory/Sales spike, CFO vs NI gap.
     is_df = _load_statement(raw_dir, ticker, "IS")
     bs_df = _load_statement(raw_dir, ticker, "BS")
     cf_df = _load_statement(raw_dir, ticker, "CF")

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""LLM-based driver forecasting and evaluation utilities."""
+
 import asyncio
 import json
 from dataclasses import dataclass
@@ -20,6 +22,8 @@ from src.experiments.driver_workflow import (
 )
 from src.llm.apiyi import create_async_client, extract_chat_content, load_apiyi_config, request_chat_completion
 from src.llm.json_utils import coerce_float, safe_json_loads
+from src.llm.prompt_config import get_prompt_section, render_prompt
+from src.llm.prompt_logger import append_prompt_log
 from src.model.dynamics_tf import DRIVER_ORDER
 from src.utils.logging import get_logger
 
@@ -27,6 +31,7 @@ from src.utils.logging import get_logger
 LOGGER = get_logger(__name__)
 
 
+# Hard bounds prevent obviously invalid LLM outputs.
 DRIVER_BOUNDS = {
     "growth": (-1.0, 1.0),
     "gross_margin": (0.0, 1.0),
@@ -51,9 +56,11 @@ class LLMRunConfig:
     window: int = 3
     max_calls: Optional[int] = None
     cache_path: Optional[Path] = None
+    prompt_log_path: Optional[Path] = None
 
 
 def _driver_history(frame: TickerFrame, idx: int, window: int) -> List[Dict[str, float]]:
+    # Convert the last few driver rows into JSON-friendly objects.
     start = max(0, idx - window)
     history = []
     for i in range(start, idx):
@@ -65,30 +72,15 @@ def _driver_history(frame: TickerFrame, idx: int, window: int) -> List[Dict[str,
 
 
 def _build_prompt(ticker: str, history: Sequence[Mapping[str, float]]) -> List[Dict[str, str]]:
-    template = {
-        "role": "system",
-        "content": (
-            "You are a financial analyst forecasting normalized driver ratios. "
-            "Return ONLY valid JSON with keys matching the driver names."
-        ),
-    }
-    user = {
-        "role": "user",
-        "content": (
-            f"Ticker: {ticker}\n"
-            "Predict next-period driver values using recent history. "
-            "Drivers: "
-            + ", ".join(DRIVER_ORDER)
-            + "\nHistory (most recent last):\n"
-            + json.dumps(history, indent=2)
-            + "\n\nReturn JSON object with each driver as a float. "
-            "Keep values within realistic ranges; avoid NaN."
-        ),
-    }
-    return [template, user]
+    # Assemble a strict JSON-only prompt for structured LLM extraction.
+    section = get_prompt_section("driver_forecast")
+    driver_list = ", ".join(DRIVER_ORDER)
+    history_json = json.dumps(history, indent=2)
+    return render_prompt(section, ticker=ticker, driver_list=driver_list, history_json=history_json)
 
 
 def _sanitize_prediction(pred: Mapping[str, object], fallback: Sequence[float]) -> np.ndarray:
+    # Replace missing outputs with last known values and clamp to bounds.
     values: List[float] = []
     for name, last in zip(DRIVER_ORDER, fallback):
         raw = pred.get(name)
@@ -108,6 +100,7 @@ async def _request_driver_prediction(
     model: Optional[str],
     temperature: float,
     client=None,
+    prompt_log_path: Optional[Path] = None,
 ) -> Mapping[str, object]:
     messages = _build_prompt(ticker, history)
     response = await request_chat_completion(
@@ -118,6 +111,8 @@ async def _request_driver_prediction(
         client=client,
     )
     content = extract_chat_content(response)
+    if prompt_log_path is not None:
+        append_prompt_log(prompt_log_path, title=f"driver_forecast:{ticker}", messages=messages, response=content)
     payload = safe_json_loads(content)
     if not isinstance(payload, Mapping):
         raise ValueError("LLM response must be a JSON object.")
@@ -145,6 +140,7 @@ async def _predict_llm_drivers_async(
     split_name: str,
     cfg: LLMRunConfig,
 ) -> Dict[str, Dict[int, np.ndarray]]:
+    # Use a single async client for all calls to avoid event-loop shutdown warnings.
     cache = _load_cache(cfg.cache_path)
     preds: Dict[str, Dict[int, np.ndarray]] = {}
     total_calls = 0
@@ -174,8 +170,10 @@ async def _predict_llm_drivers_async(
                         model=cfg.model,
                         temperature=cfg.temperature,
                         client=client,
+                        prompt_log_path=cfg.prompt_log_path,
                     )
                 except Exception as exc:
+                    # Fall back to the last observed driver if the call fails.
                     LOGGER.warning("LLM prediction failed for %s idx=%s: %s", frame.ticker, idx, exc)
                     payload = {name: float(val) for name, val in zip(DRIVER_ORDER, fallback)}
                 pred_vec = _sanitize_prediction(payload, fallback)
@@ -209,6 +207,7 @@ def run_llm_driver_experiment(
     temperature: float = 0.0,
     max_calls: Optional[int] = None,
     cache_path: Optional[Path] = None,
+    prompt_log_path: Optional[Path] = None,
 ) -> Dict[str, object]:
     frames = load_driver_dataset(proc_dir, tickers)
     val_targets = collect_targets(frames, "val")
@@ -219,6 +218,7 @@ def run_llm_driver_experiment(
         window=window,
         max_calls=max_calls,
         cache_path=cache_path,
+        prompt_log_path=prompt_log_path,
     )
     preds_val = predict_llm_drivers(frames, "val", cfg)
     preds_test = predict_llm_drivers(frames, "test", cfg)

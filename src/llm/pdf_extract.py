@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""PDF extraction for financial statements with LLM-backed parsing."""
+
 import json
 from dataclasses import dataclass
 from datetime import datetime
@@ -10,6 +12,8 @@ from pypdf import PdfReader
 
 from src.llm.apiyi import extract_chat_content, load_apiyi_config, request_chat_completion
 from src.llm.json_utils import coerce_float, safe_json_loads
+from src.llm.prompt_config import get_prompt_section, render_prompt
+from src.llm.prompt_logger import append_prompt_log
 from src.llm.ratios import compute_ratios
 from src.utils.logging import get_logger
 
@@ -57,6 +61,7 @@ def _score_page(text: str, keywords: Sequence[str]) -> int:
     hit_count = sum(1 for k in keywords if k in t)
     if hit_count == 0:
         return 0
+    # Prefer pages with table-like numeric density and explicit unit hints.
     digit_count = sum(ch.isdigit() for ch in text)
     numeric_bonus = min(10, digit_count // 200)
     unit_bonus = 2 if "in millions" in t else 0
@@ -64,6 +69,7 @@ def _score_page(text: str, keywords: Sequence[str]) -> int:
 
 
 def _find_best_page(pages: Sequence[str], keyword_sets: Sequence[Sequence[str]]) -> Optional[int]:
+    # Choose the highest-scoring page across keyword variants.
     best_idx = None
     best_score = 0
     for idx, text in enumerate(pages):
@@ -82,40 +88,19 @@ def _collect_context(pages: Sequence[str], page_idx: int, window: int = 1) -> st
 
 
 def _build_extract_prompt(company: str, statement_text: str) -> List[Dict[str, str]]:
-    return [
-        {
-            "role": "system",
-            "content": (
-                "You extract numeric values from financial statements. "
-                "Return ONLY valid JSON with numeric values (no commas). "
-                "Use the most recent year column."
-            ),
-        },
-        {
-            "role": "user",
-            "content": (
-                f"Company: {company}\n"
-                "Extract these line items from the statement text. "
-                "Use the most recent year column. If a value is missing, return null. "
-                "Values should be numeric, in the units used in the report.\n"
-                "Synonyms to map:\n"
-                "- revenue: net revenue, total revenue, net sales\n"
-                "- cogs: cost of sales, cost of revenue\n"
-                "- sga: selling, general and administrative expenses\n"
-                "- operating_income: operating profit, income from operations\n"
-                "- net_income: profit attributable to owners, net profit\n"
-                "- interest_expense: finance costs, interest paid\n"
-                "- tax_expense: income tax expense, tax\n"
-                "Required keys:\n"
-                + ", ".join(STATEMENT_KEYS)
-                + "\n\nStatement text:\n"
-                + statement_text
-            ),
-        },
-    ]
+    # Prompt includes synonym hints to improve recall across layouts.
+    section = get_prompt_section("pdf_extract")
+    keys = ", ".join(STATEMENT_KEYS)
+    return render_prompt(section, company=company, keys=keys, statement_text=statement_text)
 
 
-async def _extract_items(statement_text: str, company: str, cfg: ExtractConfig) -> Dict[str, float | None]:
+async def _extract_items(
+    statement_text: str,
+    company: str,
+    cfg: ExtractConfig,
+    *,
+    prompt_log_path: Optional[Path] = None,
+) -> Dict[str, float | None]:
     messages = _build_extract_prompt(company, statement_text)
     response = await request_chat_completion(
         messages,
@@ -124,6 +109,8 @@ async def _extract_items(statement_text: str, company: str, cfg: ExtractConfig) 
         max_tokens=cfg.max_tokens,
     )
     content = extract_chat_content(response)
+    if prompt_log_path is not None:
+        append_prompt_log(prompt_log_path, title=f"pdf_extract:{company}", messages=messages, response=content)
     raw = safe_json_loads(content)
     if not isinstance(raw, Mapping):
         raise ValueError("LLM extraction must return a JSON object.")
@@ -138,9 +125,11 @@ def extract_from_pdf(
     company: str,
     *,
     cfg: Optional[ExtractConfig] = None,
+    prompt_log_path: Optional[Path] = None,
 ) -> Dict[str, object]:
     cfg = cfg or ExtractConfig()
     pages = _read_pdf_pages(pdf_path)
+    # Locate likely statement pages by keyword heuristics before extraction.
     income_idx = _find_best_page(
         pages,
         [
@@ -166,7 +155,8 @@ def extract_from_pdf(
     if balance_idx is not None:
         texts.append(_collect_context(pages, balance_idx, window=1))
     statement_text = "\n\n".join(texts)
-    items = asyncio_run_extract(statement_text, company, cfg)
+    items = asyncio_run_extract(statement_text, company, cfg, prompt_log_path=prompt_log_path)
+    # Compute ratios locally to avoid compounding LLM errors.
     ratios = compute_ratios(items)
     meta = {
         "pdf": str(pdf_path),
@@ -179,10 +169,16 @@ def extract_from_pdf(
     return {"items": items, "ratios": ratios, "meta": meta}
 
 
-def asyncio_run_extract(statement_text: str, company: str, cfg: ExtractConfig) -> Dict[str, float | None]:
+def asyncio_run_extract(
+    statement_text: str,
+    company: str,
+    cfg: ExtractConfig,
+    *,
+    prompt_log_path: Optional[Path] = None,
+) -> Dict[str, float | None]:
     import asyncio
 
-    return asyncio.run(_extract_items(statement_text, company, cfg))
+    return asyncio.run(_extract_items(statement_text, company, cfg, prompt_log_path=prompt_log_path))
 
 
 def write_report(out_dir: Path, payload: Mapping[str, object]) -> None:

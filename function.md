@@ -16,6 +16,7 @@
 - config.yaml: 默认运行配置（ticker 列表、路径、训练参数）。
 - config_stable.yaml: 稳定子集配置。
 - config_stable_top.yaml: 稳定子集（Top）配置。
+- prompt_config.yaml: LLM prompt 模板配置。
 
 ## src/
 - __init__.py: Python 包标记。
@@ -56,6 +57,8 @@
 - shenanigans.py: 规则式“财务舞弊/红旗”检测（基于 raw 数据）。
 - risk_warnings.py: 审计意见抽取与风险段落排序。
 - loan_pricing.py: 贷款定价/转售价格/区间估计流程。
+- prompt_config.py: 读取/渲染 prompt_config 的工具。
+- prompt_logger.py: 将 prompt/response 追加到 markdown 日志。
 
 ## script/
 - __init__.py: 子包标记。
@@ -92,6 +95,7 @@
 - driver_experiments_quarter_top/: Part1 季度 baseline 输出。
 - part2_llm/: 旧版 LLM 实验缓存与指标（初步试验）。
 - part2_llm_clean/: LLM vs Part1、ensemble、robustness、CFO 建议输出。
+- part2_llm_clean_v2/: 重新运行的 Part2(a–d) 输出 + prompt log。
 - part2_pdf/GM_2023/: GM 年报抽取与比率。
 - part2_pdf/LVMH_2024/: LVMH 年报抽取与比率。
 - part2_bonus/credit_rating_metrics.json: 评级模型评估。

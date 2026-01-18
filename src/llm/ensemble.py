@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Driver-level ensemble utilities."""
+
 from typing import Dict, Iterable, Mapping
 
 import numpy as np
@@ -35,6 +37,7 @@ def tune_weight(
     best_weight = None
     best_mse = float("inf")
     results: Dict[str, float] = {}
+    # Grid-search weight on validation targets to minimize driver MSE.
     for w in weights:
         blended = blend_predictions(preds_a, preds_b, w)
         metrics = evaluate_driver_predictions(blended, targets)

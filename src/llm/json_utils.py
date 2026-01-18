@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+"""Utilities for parsing imperfect LLM JSON outputs."""
+
 import json
 from typing import Any, Mapping, Sequence
 
 
 def _strip_code_fence(text: str) -> str:
+    # Accept markdown fenced code blocks to keep prompts flexible.
     lines = [line.strip() for line in text.strip().splitlines()]
     if len(lines) >= 2 and lines[0].startswith("```") and lines[-1].startswith("```"):
         return "\n".join(lines[1:-1]).strip()
@@ -12,6 +15,7 @@ def _strip_code_fence(text: str) -> str:
 
 
 def _find_json_substring(text: str) -> str:
+    # Extract the widest plausible JSON span when extra text is present.
     for open_char, close_char in (("{", "}"), ("[", "]")):
         start = text.find(open_char)
         end = text.rfind(close_char)
@@ -28,11 +32,13 @@ def safe_json_loads(text: str) -> Any:
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError:
+        # Last resort: collapse newlines and retry.
         cleaned = cleaned.replace("\n", " ").strip()
         return json.loads(cleaned)
 
 
 def coerce_float(value: Any) -> float | None:
+    # Normalize strings like "12.5%" or "1,234.5" into floats.
     if value is None:
         return None
     if isinstance(value, (int, float)):

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Loan spread pricing, resale forecast, and interval estimation."""
+
 import json
 from dataclasses import dataclass
 from datetime import datetime
@@ -19,6 +21,7 @@ from src.utils.logging import get_logger
 LOGGER = get_logger(__name__)
 
 
+# LendingClub is used as a public proxy for term loan pricing.
 LENDING_CLUB_URL = "https://resources.lendingclub.com/LoanStats3a.csv.zip"
 FRED_DGS2 = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS2"
 FRED_DGS5 = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS5"
@@ -73,6 +76,7 @@ def _prep_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _attach_yields(df: pd.DataFrame, yields: pd.DataFrame) -> pd.DataFrame:
+    # Join Treasury yields to compute loan spreads.
     df = df.copy()
     df = pd.merge_asof(
         df.sort_values("issue_date"),
@@ -134,6 +138,7 @@ def evaluate_private_borrower(df: pd.DataFrame) -> Dict[str, float]:
 
 
 def build_resale_dataset(df: pd.DataFrame, yields: pd.DataFrame) -> pd.DataFrame:
+    # Approximate 1m resale return using yield changes and duration proxy.
     df = df.copy()
     df["next_month"] = df["issue_date"] + pd.offsets.MonthEnd(1)
     next_yields = pd.merge_asof(
@@ -173,6 +178,7 @@ def train_resale_model(df: pd.DataFrame) -> Dict[str, object]:
 
 
 def conformal_interval(y_true: np.ndarray, y_pred: np.ndarray, alpha: float = 0.05) -> float:
+    # Simple conformal half-width based on absolute residual quantile.
     residuals = np.abs(y_true - y_pred)
     return float(np.quantile(residuals, 1 - alpha))
 

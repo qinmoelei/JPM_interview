@@ -1,16 +1,19 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+"""Financial ratio formulas used in Part2 PDF extraction."""
+
 from typing import Dict, Mapping, Optional
 
 
 def _safe_div(numer: float | None, denom: float | None) -> float | None:
+    # Guard against divide-by-zero or missing values.
     if numer is None or denom in (None, 0.0):
         return None
     return float(numer) / float(denom)
 
 
 def cost_to_income(revenue: float | None, cogs: float | None, sga: float | None) -> float | None:
+    # Cost-to-income uses operating costs over revenue.
     if revenue is None:
         return None
     cost = 0.0
@@ -22,6 +25,7 @@ def cost_to_income(revenue: float | None, cogs: float | None, sga: float | None)
 
 
 def quick_ratio(current_assets: float | None, inventory: float | None, current_liabilities: float | None) -> float | None:
+    # Quick ratio excludes inventory from current assets.
     if current_assets is None or current_liabilities is None:
         return None
     inv = inventory or 0.0
@@ -43,6 +47,7 @@ def debt_to_capital(total_debt: float | None, total_equity: float | None) -> flo
 
 
 def debt_to_ebitda(total_debt: float | None, ebitda: float | None) -> float | None:
+    # Leverage ratio using EBITDA proxy.
     return _safe_div(total_debt, ebitda)
 
 

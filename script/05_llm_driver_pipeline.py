@@ -66,6 +66,7 @@ def _maybe_cfo(
     ticker: str,
     proc_dir: Path,
     preds: dict,
+    prompt_log_path: Path,
 ) -> None:
     bucket = preds.get(ticker, {})
     if not bucket:
@@ -89,6 +90,7 @@ def _maybe_cfo(
             last_driver,
             pred_driver,
             temperature=0.2,
+            prompt_log_path=prompt_log_path,
         )
     )
     (out_dir / "cfo_recommendation.json").write_text(json.dumps(rec, indent=2))
@@ -140,6 +142,7 @@ def main(cli_args: Optional[Sequence[str]] = None) -> None:
         )
     )
 
+    prompt_log_path = out_dir / "llm_prompt_log.md"
     llm_payload = run_llm_driver_experiment(
         proc_dir,
         tickers,
@@ -148,6 +151,7 @@ def main(cli_args: Optional[Sequence[str]] = None) -> None:
         model=args.model,
         max_calls=args.max_calls,
         cache_path=out_dir / "llm_cache.json",
+        prompt_log_path=prompt_log_path,
     )
     (out_dir / "llm_metrics.json").write_text(json.dumps(llm_payload["metrics"], indent=2))
     (out_dir / "llm_metadata.json").write_text(json.dumps(llm_payload["metadata"], indent=2))
@@ -196,11 +200,12 @@ def main(cli_args: Optional[Sequence[str]] = None) -> None:
             window=args.window,
             max_calls=min(args.max_calls, 10),
             cache_dir=out_dir / "robust_cache",
+            prompt_log_path=prompt_log_path,
         )
         (out_dir / "robustness_summary.json").write_text(json.dumps(robust, indent=2))
 
     if args.cfo_ticker:
-        _maybe_cfo(out_dir, args.cfo_ticker.upper(), proc_dir, llm_payload["preds_test"])
+        _maybe_cfo(out_dir, args.cfo_ticker.upper(), proc_dir, llm_payload["preds_test"], prompt_log_path)
 
 
 if __name__ == "__main__":

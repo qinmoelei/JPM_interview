@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Repeat LLM runs to quantify variance in forecasting metrics."""
+
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -35,6 +37,7 @@ def run_robustness(
     window: int = 3,
     max_calls: Optional[int] = None,
     cache_dir: Optional[Path] = None,
+    prompt_log_path: Optional[Path] = None,
 ) -> Dict[str, object]:
     frames = load_driver_dataset(proc_dir, tickers)
     targets = collect_targets(frames, "test")
@@ -42,6 +45,7 @@ def run_robustness(
     driver_rel1 = []
     state_mae = []
     state_rel1 = []
+    # Separate cache per run to avoid reusing identical outputs.
     for r in range(runs):
         cache_path = None
         if cache_dir is not None:
@@ -52,6 +56,7 @@ def run_robustness(
             window=window,
             max_calls=max_calls,
             cache_path=cache_path,
+            prompt_log_path=prompt_log_path,
         )
         preds = predict_llm_drivers(frames, "test", cfg)
         d_metrics = evaluate_driver_predictions(preds, targets)
