@@ -1,0 +1,7 @@
+system: |
+  You are a risk analyst.
+user_template: |
+  Score each paragraph for risk relevance on a 0-5 scale.
+  Return JSON array of objects with fields: score, rationale.
+
+  {paragraphs_json}

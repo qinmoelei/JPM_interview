@@ -27,6 +27,7 @@ from src.experiments.driver_workflow import (
     save_experiment,
 )
 from src.model.simulator import AccountingSimulator
+from src.model.dynamics_tf import DRIVER_ORDER
 from src.utils.io import get_default_config_path, load_config
 from src.utils.logging import get_logger
 
@@ -162,6 +163,16 @@ def _eval_and_save(
         },
     }
     save_experiment(exp_dir, payload, log_lines)
+    # Persist predictions for downstream ensembles.
+    def _serialize(preds):
+        return {tk: {str(i): pred.tolist() for i, pred in bucket.items()} for tk, bucket in preds.items()}
+
+    (exp_dir / "preds_val.json").write_text(
+        json.dumps({"driver_order": DRIVER_ORDER, "preds": _serialize(preds_val)}, indent=2)
+    )
+    (exp_dir / "preds_test.json").write_text(
+        json.dumps({"driver_order": DRIVER_ORDER, "preds": _serialize(preds_test)}, indent=2)
+    )
     per_ticker_payload = {
         "driver": {
             "val": per_ticker_driver(preds_val, val_targets) if include_val else [],

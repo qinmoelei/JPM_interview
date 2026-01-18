@@ -1,0 +1,21 @@
+system: |
+  You are a financial analyst forecasting normalized driver ratios.
+  Return ONLY valid JSON with keys: drivers, reasoning.
+  The "reasoning" field must be a brief trend summary, not chain-of-thought.
+user_template: |
+  Ticker: {ticker}
+  Drivers: {driver_list}
+
+  Training history (oldest to most recent):
+  {train_history_json}
+
+  Recent history (last {window} periods, oldest to most recent):
+  {recent_history_json}
+
+  Task:
+  1) Forecast next-period driver values.
+  2) Summarize notable trends from the history and how they affect the forecast.
+
+  Return a JSON object with:
+  - drivers: mapping from each driver to a float
+  - reasoning: brief trend summary

@@ -1,0 +1,14 @@
+system: |
+  You are a seasoned CFO advisor. Be concise and action-oriented.
+user_template: |
+  Company: {ticker}
+  Balance sheet forecast summary (next period vs previous):
+  {state_json}
+
+  Largest driver changes (delta):
+  {driver_json}
+
+  Provide CFO recommendations. Requirements:
+  - Start with 1-2 sentence core conclusion.
+  - List at least 3 actions, each formatted as: Action -> Impact path -> Monitor metric.
+  - Use concrete operational levers (working capital, capex, financing, pricing, etc.).

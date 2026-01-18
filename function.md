@@ -16,7 +16,11 @@
 - config.yaml: 默认运行配置（ticker 列表、路径、训练参数）。
 - config_stable.yaml: 稳定子集配置。
 - config_stable_top.yaml: 稳定子集（Top）配置。
-- prompt_config.yaml: LLM prompt 模板配置。
+- prompt/: LLM prompt 模板目录（按任务拆分）。
+- prompt/driver_forecast.yaml: driver 预测 prompt。
+- prompt/pdf_extract.yaml: PDF 抽取 prompt。
+- prompt/cfo_recommendation.yaml: CFO 建议 prompt。
+- prompt/risk_score.yaml: 风险段落打分 prompt。
 
 ## src/
 - __init__.py: Python 包标记。
@@ -57,8 +61,10 @@
 - shenanigans.py: 规则式“财务舞弊/红旗”检测（基于 raw 数据）。
 - risk_warnings.py: 审计意见抽取与风险段落排序。
 - loan_pricing.py: 贷款定价/转售价格/区间估计流程。
-- prompt_config.py: 读取/渲染 prompt_config 的工具。
+- prompt_config.py: 读取/渲染 prompt 配置（支持目录）。
 - prompt_logger.py: 将 prompt/response 追加到 markdown 日志。
+- reasoning_logger.py: LLM 简短理由文本日志。
+- driver_pipeline.py: LLM driver 预测主流程（供脚本调用）。
 
 ## script/
 - __init__.py: 子包标记。
@@ -84,34 +90,16 @@
 - processed/year/*_states.csv: 年度 states (T x 15)。
 - processed/year/*_drivers.csv: 年度 drivers (T-1 x 13)。
 - processed/year/*_simulation.npz: simulator roll-out 结果。
-- pdf/gm_2023_ar.pdf: GM 年报（题面指定）。
-- pdf/lvmh_2024.pdf: LVMH 年报（泛化测试）。
-- pdf/evergrande_2022.pdf: Evergrande 年报（评级与风险测试）。
-- pdf/hkicpa_audit_example.pdf: HKICPA 审计意见示例。
-- credit_rating/rating_training_dataset.csv: 评级训练数据集（由 processed 数据构建）。
 
 ## results/
 - driver_experiments_year_top/: Part1 driver baseline 输出。
 - driver_experiments_quarter_top/: Part1 季度 baseline 输出。
-- part2_llm/: 旧版 LLM 实验缓存与指标（初步试验）。
-- part2_llm_clean/: LLM vs Part1、ensemble、robustness、CFO 建议输出。
-- part2_llm_clean_v2/: 重新运行的 Part2(a–d) 输出 + prompt log。
-- part2_pdf/GM_2023/: GM 年报抽取与比率。
-- part2_pdf/LVMH_2024/: LVMH 年报抽取与比率。
-- part2_bonus/credit_rating_metrics.json: 评级模型评估。
-- part2_bonus/evergrande_rating.json: Evergrande 评级输出。
-- part2_bonus/shenanigans_flags.json: 红旗检测输出。
-- part2_bonus/audit_hkicpa_example.json: HKICPA 审计意见抽取结果。
-- part2_bonus/audit_evergrande_2022.json: Evergrande 审计意见抽取结果。
-- part2_bonus/topk_paragraphs.json: 风险段落 Top-k。
-- part2_bonus/human_review_sheet.csv: 人工审核模板。
-- part2_bonus/loan_pricing/: 贷款定价/转售价格/区间输出。
-- part2_bonus/loan_pricing_summary.json: 贷款定价汇总指标。
+- driver_experiments_*/**/preds_val.json: Part1 逐 ticker 预测（val，用于 ensemble）。
+- driver_experiments_*/**/preds_test.json: Part1 逐 ticker 预测（test，用于 ensemble）。
 
 ## reports/
 - report.tex: Part1 报告 LaTeX 源码。
 - JPMC_DataProject.pdf: Part1 报告 PDF。
-- part2.md: 本次 Part2 + Bonus 实验记录。
 
 ## plan_prompts/
 - part2_后续计划.md: Part2/Bonus 任务拆解说明。
